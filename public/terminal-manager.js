@@ -16,19 +16,19 @@
 const isMac = window.api.platform === 'darwin';
 function setupTerminalKeyBindings(terminal, container, getSessionId, { onFind } = {}) {
   terminal.attachCustomKeyEventHandler((e) => {
-    // Cmd/Ctrl+F → open terminal search bar
-    if (e.key === 'f' && (isMac ? e.metaKey : e.ctrlKey) && !e.shiftKey && !e.altKey) {
+    // terminalFind → open terminal search bar (see keybindings.js)
+    if (matchKey(e, 'terminalFind')) {
       if (e.type === 'keydown' && onFind) onFind();
       return false;
     }
 
-    // Cmd/Ctrl+Shift+G → toggle grid view
-    if (e.key === 'g' && (isMac ? e.metaKey : e.ctrlKey) && e.shiftKey && !e.altKey) {
+    // toggleGrid → toggle grid view (see keybindings.js)
+    if (matchKey(e, 'toggleGrid')) {
       if (e.type === 'keydown') { e._handled = true; toggleGridView(); }
       return false;
     }
 
-    // Session navigation: Cmd+Shift+[/], Cmd+Arrow
+    // Session navigation: prev/next + arrows (see keybindings.js)
     if (isSessionNavKey(e)) {
       if (e.type === 'keydown') { e._handled = true; handleSessionNavKey(e); }
       return false;

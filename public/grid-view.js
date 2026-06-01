@@ -379,36 +379,28 @@ function navigateGrid(direction) {
 
 // Returns true if the key combo is a session nav shortcut (used by xterm to block without acting)
 function isSessionNavKey(e) {
-  const mod = isMac ? e.metaKey : e.ctrlKey;
-  if (!mod || e.altKey) return false;
-  if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) return true;
-  if (!e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return true;
-  return false;
+  return matchKey(e, 'prevSession') || matchKey(e, 'nextSession') ||
+    matchKey(e, 'navLeft') || matchKey(e, 'navRight') ||
+    matchKey(e, 'navUp') || matchKey(e, 'navDown');
 }
 
 function handleSessionNavKey(e) {
-  const mod = isMac ? e.metaKey : e.ctrlKey;
-  if (!mod || e.altKey) return false;
-
-  // Cmd+Shift+[ or Cmd+Shift+] — prev/next session
-  // On macOS, Shift changes e.key to { / }, so check code for reliable matching
-  if (e.shiftKey && (e.code === 'BracketLeft' || e.code === 'BracketRight')) {
+  // prev/next session (see keybindings.js)
+  if (matchKey(e, 'prevSession') || matchKey(e, 'nextSession')) {
     e.preventDefault();
-    if (e.type === 'keydown') navigateSession(e.code === 'BracketLeft' ? -1 : 1);
+    if (e.type === 'keydown') navigateSession(matchKey(e, 'prevSession') ? -1 : 1);
     return true;
   }
 
-  // Cmd+Arrow — in grid view: 2D grid navigation; in single view: left/right cycle sessions
-  if (!e.shiftKey && ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+  // arrows — in grid view: 2D grid navigation; in single view: prev/next cycle
+  const navDirs = { navLeft: 'left', navRight: 'right', navUp: 'up', navDown: 'down' };
+  for (const action in navDirs) {
+    if (!matchKey(e, action)) continue;
     e.preventDefault();
     if (e.type === 'keydown') {
-      if (gridViewActive) {
-        const dirMap = { ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down' };
-        navigateGrid(dirMap[e.key]);
-      } else {
-        const dir = (e.key === 'ArrowLeft' || e.key === 'ArrowUp') ? -1 : 1;
-        navigateSession(dir);
-      }
+      const dir = navDirs[action];
+      if (gridViewActive) navigateGrid(dir);
+      else navigateSession(dir === 'left' || dir === 'up' ? -1 : 1);
     }
     return true;
   }

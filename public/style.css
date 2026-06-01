@@ -3690,3 +3690,8 @@ body { display: flex; flex-direction: column; }
   margin-right: 5px;
   vertical-align: middle;
 }
+
+.kb-record-btn.kb-recording {
+  border-color: #8088ff;
+  color: #8088ff;
+}
