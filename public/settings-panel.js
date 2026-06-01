@@ -33,6 +33,9 @@
     // saved global values. A fresh install shows these, not blanks.
     const appDefaults = (await window.api.getEffectiveSettings(null).catch(() => null)) || {};
 
+    // Working copy of keyboard shortcuts (global scope only), edited by the recorder UI.
+    let kbWorking = JSON.parse(JSON.stringify(typeof KEYBINDINGS !== 'undefined' ? KEYBINDINGS : {}));
+
     const shortName = isProject
       ? shortProjectPath(projectPath)
       : 'Global';
@@ -97,6 +100,7 @@
     const visCountValue = fieldValue('visibleSessionCount', 10);
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
+    const sidebarZoomValue = fieldValue('sidebarZoom', 1);
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     // Global-only: where new projects get their folder (projects.js). Empty
     // means the default, ~/Switchboard.
@@ -270,6 +274,16 @@
 
         <div class="settings-field">
           <div class="settings-field-info">
+            <span class="settings-label">Sidebar Zoom</span>
+            <div class="settings-description">Scale the left panel (fonts and spacing). 1 = normal, below 1 shrinks. Applies immediately.</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="number" class="settings-input settings-input-compact" id="sv-sidebar-zoom" min="0.5" max="1.5" step="0.05" value="${sidebarZoomValue}">
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
             <span class="settings-label">Shell Profile</span>
             <div class="settings-description">Shell used for terminal and Claude sessions. Changes take effect for new sessions only.</div>
           </div>
@@ -330,6 +344,29 @@
           </div>
           <div class="settings-field-control">
             <label class="settings-toggle"><input type="checkbox" id="sv-mcp-emulation" ${mcpEmulationValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
+      </div>` : ''}
+
+      ${!isProject ? `<div class="settings-section">
+        <div class="settings-section-title">Keyboard Shortcuts</div>
+        <div class="settings-description" style="margin-bottom:10px">Click a shortcut, then press the new key combination. Esc cancels.</div>
+        ${Object.keys(KEYBINDING_LABELS).map(action => `
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">${escapeHtml(KEYBINDING_LABELS[action])}</span>
+          </div>
+          <div class="settings-field-control">
+            <button type="button" class="settings-select kb-record-btn" data-action="${action}" style="cursor:pointer;min-width:90px;text-align:center">${escapeHtml(bindingDisplay(kbWorking[action]))}</button>
+          </div>
+        </div>`).join('')}
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Reset shortcuts</span>
+            <div class="settings-description">Restore all shortcuts to their defaults</div>
+          </div>
+          <div class="settings-field-control">
+            <button type="button" class="settings-check-updates-btn" id="kb-reset-btn">Reset to defaults</button>
           </div>
         </div>
       </div>` : ''}
@@ -409,6 +446,41 @@
       }).catch(() => {});
     }
 
+    // Keyboard shortcut recorder: click a button, then press the new combo.
+    settingsViewerBody.querySelectorAll('.kb-record-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const action = btn.dataset.action;
+        const previousLabel = btn.textContent;
+        btn.textContent = 'Press keys…';
+        btn.classList.add('kb-recording');
+        const cleanup = () => {
+          btn.classList.remove('kb-recording');
+          document.removeEventListener('keydown', onKey, true);
+        };
+        const onKey = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === 'Escape') { btn.textContent = previousLabel; cleanup(); return; }
+          const binding = bindingFromEvent(e);
+          if (!binding) return; // lone modifier — keep waiting
+          kbWorking[action] = binding;
+          btn.textContent = bindingDisplay(binding);
+          cleanup();
+        };
+        document.addEventListener('keydown', onKey, true);
+      });
+    });
+
+    const kbResetBtn = settingsViewerBody.querySelector('#kb-reset-btn');
+    if (kbResetBtn) {
+      kbResetBtn.addEventListener('click', () => {
+        kbWorking = JSON.parse(JSON.stringify(KEYBINDING_DEFAULTS));
+        settingsViewerBody.querySelectorAll('.kb-record-btn').forEach(b => {
+          b.textContent = bindingDisplay(kbWorking[b.dataset.action]);
+        });
+      });
+    }
+
     // Save button
     settingsViewerBody.querySelector('#sv-save-btn').addEventListener('click', async () => {
       let settings = {};
@@ -453,6 +525,8 @@
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
+        settings.sidebarZoom = parseFloat(settingsViewerBody.querySelector('#sv-sidebar-zoom').value) || 1;
+        settings.keybindings = kbWorking;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
@@ -476,6 +550,12 @@
         }
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
+        }
+        if (typeof window._applySidebarZoom === 'function') {
+          window._applySidebarZoom(settings.sidebarZoom);
+        }
+        if (settings.keybindings && typeof applyKeybindingOverrides === 'function') {
+          applyKeybindingOverrides(settings.keybindings);
         }
         if (typeof refreshSidebar === 'function') refreshSidebar();
       }

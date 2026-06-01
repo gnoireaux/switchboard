@@ -7013,3 +7013,7 @@ body { display: flex; flex-direction: column; }
   overflow-wrap: anywhere;
   pointer-events: none;
 }
+.kb-record-btn.kb-recording {
+  border-color: #8088ff;
+  color: #8088ff;
+}
