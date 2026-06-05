@@ -485,6 +485,13 @@ function createTerminalEntry(session) {
     webglAddon = new WebglAddon.WebglAddon();
     webglAddon.onContextLoss(() => webglAddon.dispose());
     terminal.loadAddon(webglAddon);
+    // When the glyph texture atlas is rebuilt or extended (e.g. it overflows after
+    // Claude emits many distinct box-drawing/unicode glyphs), already-rendered cells
+    // keep pointing at stale atlas slots and show ghosted/garbled glyphs. Repaint all
+    // visible rows against the new atlas so they re-resolve their glyphs.
+    const repaintVisible = () => terminal.refresh(0, terminal.rows - 1);
+    webglAddon.onChangeTextureAtlas(repaintVisible);
+    webglAddon.onAddTextureAtlasCanvas(repaintVisible);
   } catch (e) {
     console.warn('[terminal] WebGL addon failed, falling back to DOM renderer', e);
     webglAddon = null;
