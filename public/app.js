@@ -125,6 +125,15 @@ window._applySidebarZoom = (zoom) => {
   // zoom scales the box after layout, so height:100vh would render as (z*100)vh and
   // leave a gap below. Counter-scale the height so the sidebar still fills the viewport.
   sidebar.style.height = z === 1 ? '' : (100 / z) + 'vh';
+  // CSS zoom changes the page raster scale, but xterm's WebGL renderer only watches
+  // devicePixelRatio (matchMedia) and never sees it, so terminal glyph atlases stay
+  // rasterized at the old scale and render ghosted. Clear + repaint every terminal.
+  for (const [, entry] of openSessions) {
+    if (entry.webglAddon) {
+      try { entry.webglAddon.clearTextureAtlas(); } catch {}
+    }
+    entry.terminal.refresh(0, entry.terminal.rows - 1);
+  }
 };
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 let searchMatchProjectPaths = null; // Set<string> of project paths matched by name
