@@ -52,6 +52,13 @@ function formatDate(date) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
+// Format current context-window size (tokens) as a ' · Nk ctx' suffix.
+// Returns '' when unknown or below 1k (too small to be worth showing).
+function formatContextTokens(tokens) {
+  if (!tokens || tokens < 1000) return '';
+  return ' · ' + Math.round(tokens / 1000) + 'k ctx';
+}
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;

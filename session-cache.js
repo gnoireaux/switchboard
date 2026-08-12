@@ -375,6 +375,7 @@ function buildProjectsFromCache(showArchived) {
       created: row.created,
       modified: row.modified,
       messageCount: row.messageCount,
+      contextTokens: row.contextTokens,
       projectPath: row.projectPath,
       slug: row.slug || null,
       aiTitle: row.aiTitle || null,

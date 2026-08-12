@@ -294,6 +294,7 @@ test('fresh database gets fileMtime column', () => {
     assert.equal(r.status, 0, r.stderr);
     const state = inspectDb(dir);
     assert.ok(state.cols.includes('fileMtime'));
+    assert.ok(state.cols.includes('contextTokens'));
     for (const t of PROJECT_TABLES) assert.ok(state.tables.includes(t), `${t} table created`);
     assert.ok(state.metaCols.includes('projectId') && state.metaCols.includes('trackId'), 'session_meta carries the assignment columns');
   } finally {
@@ -431,6 +432,7 @@ test('foreign higher-version database is reconciled, not crashed', () => {
 
     const state = inspectDb(dir);
     assert.ok(state.cols.includes('fileMtime'), 'fileMtime column added');
+    assert.ok(state.cols.includes('contextTokens'), 'contextTokens column added');
     assert.equal(state.cacheCount, 0, 'stale cache cleared for re-index');
     assert.equal(state.metaCount, 0, 'folder index gate cleared for re-index');
     assert.equal(state.version, '5', 'foreign db_version not downgraded');

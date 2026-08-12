@@ -822,7 +822,9 @@ function buildSessionItem(session) {
   const timeEl = document.createElement('span');
   timeEl.className = 'session-time';
   timeEl.title = session.sessionId;
-  timeEl.textContent = timeStr + (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '');
+  timeEl.textContent = timeStr +
+    (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '') +
+    formatContextTokens(session.contextTokens);
   metaEl.append(mark, timeEl);
   // Started by a scheduled task: a clock, with which one and when in its tooltip.
   if (session.scheduleId && typeof scheduleChipHtml === 'function') {

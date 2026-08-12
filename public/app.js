@@ -858,7 +858,7 @@ setInterval(() => {
     const timeEl = item.querySelector('.session-time');
     if (!timeEl) continue;
     const msgSuffix = session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '';
-    timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix;
+    timeEl.textContent = formatDate(new Date(session.modified)) + msgSuffix + formatContextTokens(session.contextTokens);
   }
 }, 30000);
 

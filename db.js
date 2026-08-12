@@ -54,6 +54,7 @@ db.exec(`
     created TEXT,
     modified TEXT,
     messageCount INTEGER DEFAULT 0,
+    contextTokens INTEGER DEFAULT 0,
     slug TEXT,
     aiTitle TEXT,
     fileMtime TEXT,
@@ -179,6 +180,16 @@ if (migrations.length > currentDbVersion) {
     'indexedBytes INTEGER DEFAULT 0', 'firstTimestamp TEXT', 'lastTimestamp TEXT',
   ]) {
     if (!cols.has(col.split(' ')[0])) db.exec(`ALTER TABLE session_cache ADD COLUMN ${col}`);
+  }
+  if (!cols.has('contextTokens')) {
+    db.exec('ALTER TABLE session_cache ADD COLUMN contextTokens INTEGER DEFAULT 0');
+    // contextTokens (context-window size from the last assistant turn) is filled
+    // during indexing. Existing rows default to 0, and neither the folder-level
+    // index gate nor the incremental parser's resume state would re-read a
+    // dormant session to populate them, so clear the cache to force a one-time
+    // full re-index.
+    db.exec('DELETE FROM session_cache');
+    db.exec('DELETE FROM cache_meta');
   }
 }
 
@@ -353,18 +364,18 @@ const stmts = {
   // text or parser state. Keep the harness and transcript-location fields.
   cacheGetAll: db.prepare(`
     SELECT sessionId, folder, projectPath, summary, firstPrompt, created, modified,
-           messageCount, slug, aiTitle, fileMtime, runtime, sessionFile
+           messageCount, contextTokens, slug, aiTitle, fileMtime, runtime, sessionFile
     FROM session_cache
   `),
   cacheUpsert: db.prepare(`
-    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, slug, aiTitle, fileMtime, runtime, sessionFile, customTitle, textContent, headHash, indexedBytes, firstTimestamp, lastTimestamp)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO session_cache (sessionId, folder, projectPath, summary, firstPrompt, created, modified, messageCount, contextTokens, slug, aiTitle, fileMtime, runtime, sessionFile, customTitle, textContent, headHash, indexedBytes, firstTimestamp, lastTimestamp)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(sessionId) DO UPDATE SET
       folder = excluded.folder, projectPath = excluded.projectPath,
       summary = excluded.summary, firstPrompt = excluded.firstPrompt,
       created = excluded.created, modified = excluded.modified,
-      messageCount = excluded.messageCount, slug = excluded.slug,
-      aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
+      messageCount = excluded.messageCount, contextTokens = excluded.contextTokens,
+      slug = excluded.slug, aiTitle = excluded.aiTitle, fileMtime = excluded.fileMtime,
       runtime = excluded.runtime, sessionFile = excluded.sessionFile,
       customTitle = excluded.customTitle, textContent = excluded.textContent,
       headHash = excluded.headHash, indexedBytes = excluded.indexedBytes,
@@ -526,6 +537,7 @@ const upsertCachedSessionsBatch = db.transaction((sessions) => {
     stmts.cacheUpsert.run(
       s.sessionId, s.folder, s.projectPath, s.summary,
       s.firstPrompt, s.created, s.modified, s.messageCount || 0,
+      s.contextTokens || 0,
       s.slug || null, s.aiTitle || null, s.fileMtime || null,
       s.runtime || 'claude', s.sessionFile || null,
       s.customTitle || null, s.textContent || null, s.headHash || null,

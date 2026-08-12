@@ -244,13 +244,14 @@ function hashHead(fd, stat) {
 /** Accumulator. Every field is either a first-occurrence or a running total,
  *  which is what makes resuming mid-file valid. */
 function emptyState() {
-  return { summary: '', messageCount: 0, textParts: [], slug: null, customTitle: null, aiTitle: null, firstTimestamp: null, lastTimestamp: null };
+  return { summary: '', messageCount: 0, contextTokens: 0, textParts: [], slug: null, customTitle: null, aiTitle: null, firstTimestamp: null, lastTimestamp: null };
 }
 
 function stateFrom(prev) {
   return {
     summary: prev.summary || '',
     messageCount: prev.messageCount || 0,
+    contextTokens: prev.contextTokens || 0,
     textParts: prev.textContent ? [prev.textContent] : [],
     slug: prev.slug || null,
     customTitle: prev.customTitle || null,
@@ -277,6 +278,18 @@ function applyLine(line, st) {
     (entry.type === 'message' && (entry.role === 'user' || entry.role === 'assistant'));
   if (isConversationMessage) {
     st.messageCount++;
+  }
+
+  // Context-window occupancy from the LAST assistant turn's usage:
+  // input_tokens + cache_read + cache_creation = tokens loaded in the window at
+  // that turn (what a resume would pay for). Assistant entries are chronological
+  // and this is last-wins, so it stays correct when indexing resumes mid-file.
+  const usage = entry.message?.usage;
+  if (usage && (entry.type === 'assistant' ||
+      (entry.type === 'message' && entry.role === 'assistant'))) {
+    st.contextTokens = (usage.input_tokens || 0) +
+      (usage.cache_read_input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0);
   }
 
   const msg = entry.message;
@@ -336,7 +349,8 @@ function readSessionFile(filePath, folder, projectPath, prev = null) {
       created: st.firstTimestamp || stat.birthtime.toISOString(),
       modified: st.lastTimestamp || fileMtime,
       fileMtime,
-      messageCount: st.messageCount, textContent: st.textParts.join('\n'),
+      messageCount: st.messageCount, contextTokens: st.contextTokens,
+      textContent: st.textParts.join('\n'),
       slug: st.slug, customTitle: st.customTitle, aiTitle: st.aiTitle,
       firstTimestamp: st.firstTimestamp, lastTimestamp: st.lastTimestamp,
       headHash,
