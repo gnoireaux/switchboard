@@ -183,13 +183,17 @@ if (migrations.length > currentDbVersion) {
   }
   if (!cols.has('contextTokens')) {
     db.exec('ALTER TABLE session_cache ADD COLUMN contextTokens INTEGER DEFAULT 0');
-    // contextTokens (context-window size from the last assistant turn) is filled
-    // during indexing. Existing rows default to 0, and neither the folder-level
-    // index gate nor the incremental parser's resume state would re-read a
-    // dormant session to populate them, so clear the cache to force a one-time
-    // full re-index.
-    db.exec('DELETE FROM session_cache');
-    db.exec('DELETE FROM cache_meta');
+    // contextTokens (context-window size from the last assistant turn) is only
+    // filled while indexing, so existing rows need one re-read. Clearing their
+    // invalidation key does that without dropping the rows: the cached summary,
+    // search text and timestamps stay usable until the re-read lands.
+    //
+    // The folder-level gate in cache_meta is deliberately left alone — a schema
+    // migration must not reset it (test/db-schema-reconcile.test.js). A folder
+    // whose directory mtime never changes therefore backfills contextTokens
+    // only once something in it moves, which is exactly when the number starts
+    // mattering again.
+    db.exec('UPDATE session_cache SET fileMtime = NULL, headHash = NULL, indexedBytes = 0');
   }
 }
 
