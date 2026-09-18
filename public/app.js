@@ -1496,6 +1496,38 @@ function renderDefaultStatus() {
   statusBarInfo.textContent = parts.join(' \u00b7 ');
 }
 
+// Cmd+Q hold-to-quit overlay. Main process starts a QUIT_HOLD_MS hold when Cmd+Q
+// is pressed with running sessions; this shows a progress bar that fills over that
+// duration, and hides on cancel (key released / window blurred) or on quit.
+let quitOverlayEl = null;
+function ensureQuitOverlay() {
+  if (quitOverlayEl) return quitOverlayEl;
+  quitOverlayEl = document.createElement('div');
+  quitOverlayEl.className = 'quit-hold-overlay';
+  quitOverlayEl.innerHTML =
+    '<div class="quit-hold-card">' +
+    '<div class="quit-hold-title">Hold ⌘Q to quit</div>' +
+    '<div class="quit-hold-subtitle">Running sessions will be stopped</div>' +
+    '<div class="quit-hold-track"><div class="quit-hold-bar"></div></div>' +
+    '</div>';
+  document.body.appendChild(quitOverlayEl);
+  return quitOverlayEl;
+}
+window.api.onQuitHold((state) => {
+  const el = ensureQuitOverlay();
+  const bar = el.querySelector('.quit-hold-bar');
+  if (state.phase === 'start') {
+    bar.style.transition = 'none';
+    bar.style.width = '0%';
+    void bar.offsetWidth; // force reflow so the transition below animates from 0
+    bar.style.transition = `width ${state.duration}ms linear`;
+    bar.style.width = '100%';
+    el.classList.add('visible');
+  } else {
+    el.classList.remove('visible');
+  }
+});
+
 window.api.onStatusUpdate((text, type) => {
   if (activityTimer) clearTimeout(activityTimer);
   statusBarActivity.textContent = text;

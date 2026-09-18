@@ -102,6 +102,23 @@ const activeSessions = new Map();
 let mainWindow = null;
 let appIsQuitting = false;
 
+// Quit guard: Cmd+Q requires a 2s hold when sessions are running (see
+// before-input-event in createWindow). quitApp() is the single deliberate exit.
+const QUIT_HOLD_MS = 2000;
+// Longest gap between auto-repeat keyDowns we still treat as "key held". Must exceed
+// the system "Delay Until Repeat" (default ~250-500ms) so a genuine hold isn't
+// mistaken for a release before the first repeat arrives.
+const QUIT_HOLD_REPEAT_GAP_MS = 1200;
+function quitApp() {
+  app.quit();
+}
+function hasRunningSessions() {
+  for (const [, session] of activeSessions) {
+    if (!session.exited) return true;
+  }
+  return false;
+}
+
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
@@ -179,12 +196,65 @@ function createWindow() {
     `);
   });
 
+  // Cmd+Q hold-to-quit guard. The menu's Quit item has no accelerator, so Cmd+Q
+  // arrives here instead of triggering an immediate quit. With running sessions,
+  // the user must HOLD Cmd+Q for QUIT_HOLD_MS.
+  //
+  // macOS does NOT deliver keyUp for a key released while Cmd is still held, so we
+  // can't detect release from keyUp. Instead we rely on auto-repeat: while held,
+  // the OS streams repeat keyDown events; each one re-arms a watchdog. When the key
+  // is released the repeats stop, the watchdog fires and cancels. Quitting requires
+  // a repeat keyDown to arrive after the full hold has elapsed, so a single tap (no
+  // repeats) can never reach the threshold — fail-safe against accidental Cmd+Q.
+  let quitHoldTimer = null;   // watchdog: fires when auto-repeat stops (= released)
+  let quitHoldActive = false;
+  let quitHoldStart = 0;
+  const cancelQuitHold = () => {
+    if (quitHoldTimer) { clearTimeout(quitHoldTimer); quitHoldTimer = null; }
+    if (quitHoldActive) {
+      quitHoldActive = false;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('quit-hold', { phase: 'cancel' });
+      }
+    }
+  };
+  mainWindow.on('blur', cancelQuitHold);
+
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm
   // for reverse-i-search.
   mainWindow.webContents.on('before-input-event', (event, input) => {
-    if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
+
+    // Cmd+Q: handle on both keyDown and keyUp, so return before the keyDown-only guard below.
+    if (input.meta && key === 'q' && !input.control && !input.alt) {
+      event.preventDefault();
+      if (input.type === 'keyDown') {
+        if (!hasRunningSessions()) { quitApp(); return; }
+        if (!quitHoldActive) {
+          quitHoldActive = true;
+          quitHoldStart = Date.now();
+          mainWindow.webContents.send('quit-hold', { phase: 'start', duration: QUIT_HOLD_MS });
+        } else if (Date.now() - quitHoldStart >= QUIT_HOLD_MS) {
+          // Auto-repeat has continued for the full hold duration -> quit for real.
+          if (quitHoldTimer) { clearTimeout(quitHoldTimer); quitHoldTimer = null; }
+          quitHoldActive = false;
+          quitApp();
+          return;
+        }
+        // Re-arm the release watchdog on every (repeat) keyDown.
+        if (quitHoldTimer) clearTimeout(quitHoldTimer);
+        quitHoldTimer = setTimeout(cancelQuitHold, QUIT_HOLD_REPEAT_GAP_MS);
+      }
+      return;
+    }
+    // Releasing Cmd or Q during a hold cancels it.
+    if (input.type === 'keyUp' && (key === 'q' || key === 'meta')) {
+      cancelQuitHold();
+      return;
+    }
+
+    if (input.type !== 'keyDown') return;
     if (key === 'r' && input.meta) event.preventDefault();
     if (key === 'r' && input.control && input.shift) event.preventDefault();
   });
@@ -241,7 +311,11 @@ function buildMenu() {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        // Accelerator intentionally omitted: Cmd+Q is handled in the renderer
+        // via a 2s hold-to-quit guard (see before-input-event in createWindow)
+        // so an accidental Cmd+Q with running sessions doesn't kill them.
+        // Quitting from the menu is a deliberate action, so it quits immediately.
+        { label: `Quit ${app.name}`, click: () => quitApp() },
       ],
     },
     {

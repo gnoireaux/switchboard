@@ -98,6 +98,9 @@ contextBridge.exposeInMainWorld('api', {
   resizeTask: (projectPath, label, cols, rows) => ipcRenderer.send('task-resize', projectPath, label, cols, rows),
 
   // Listeners (main → renderer)
+  onQuitHold: (callback) => {
+    ipcRenderer.on('quit-hold', (_event, state) => callback(state));
+  },
   onTerminalData: (callback) => {
     ipcRenderer.on('terminal-data', (_event, sessionId, data) => callback(sessionId, data));
   },
