@@ -52,6 +52,9 @@ const {
   parseAgentsJson,
 } = require('./blocked-agent-notifications');
 const { INITIAL_PROMPT_FALLBACK_MS, buildInitialPromptWrites } = require('./initial-prompt-delivery');
+const {
+  defaultLaunchPaths, ensureLaunchToken, startLaunchSocketServer,
+} = require('./launch-socket-server');
 
 
 
@@ -2271,6 +2274,43 @@ function startBlockedAgentsPoller() {
   blockedAgentTimer = setInterval(pollBlockedAgents, AGENT_POLL_INTERVAL_MS);
 }
 
+// --- Launch socket: a running session hands its successor to Switchboard ---
+let launchSocket = null;
+
+// An external caller may only launch into a project Switchboard already tracks.
+// Auto-adding a project on an unauthenticated-by-path request is its own trust
+// question, so an unknown cwd is refused and the human adds the project.
+function handleExternalLaunchRequest(request) {
+  if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Switchboard has no window open' };
+  const known = buildProjectsFromCache(true).some(p => p.projectPath === request.cwd);
+  if (!known) {
+    log.warn(`[launch-socket] refused unknown project ${request.cwd}`);
+    return { ok: false, error: `not a Switchboard project: ${request.cwd}` };
+  }
+  mainWindow.webContents.send('launch-session-request', {
+    projectPath: request.cwd,
+    initialPrompt: request.prompt,
+    initialPromptAutoSubmit: request.autoSubmit,
+  });
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  log.info(`[launch-socket] launching in ${request.cwd} (${request.prompt.length} chars, autoSubmit=${request.autoSubmit})`);
+  return { ok: true };
+}
+
+async function startLaunchSocket() {
+  const { socketPath, tokenPath } = defaultLaunchPaths();
+  try {
+    const token = ensureLaunchToken(tokenPath);
+    launchSocket = await startLaunchSocketServer({
+      socketPath, token, logger: log, onLaunch: handleExternalLaunchRequest,
+    });
+  } catch (err) {
+    // A dead entry point must not stop the app from running.
+    log.error(`[launch-socket] not listening: ${err?.message || String(err)}`);
+  }
+}
+
 // --- IPC: app version ---
 ipcMain.handle('get-app-version', () => app.getVersion());
 
@@ -2360,6 +2400,7 @@ function startScheduleTicker() {
     startProjectsWatcher();
     startHarnessWatchers();
     startBlockedAgentsPoller();
+    startLaunchSocket();
     // Retry legacy imports each launch; successful files are remembered in
     // the DB, including deleted tasks. Missing folders can be picked up later.
     // Then tick once a minute and launch due tasks through the renderer.
@@ -2401,6 +2442,11 @@ app.on('before-quit', () => {
   if (blockedAgentTimer) {
     clearInterval(blockedAgentTimer);
     blockedAgentTimer = null;
+  }
+
+  if (launchSocket) {
+    launchSocket.close();
+    launchSocket = null;
   }
 
   // Close filesystem watcher

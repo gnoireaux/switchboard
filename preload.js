@@ -126,6 +126,9 @@ contextBridge.exposeInMainWorld('api', {
   onProjectsChanged: (callback) => {
     ipcRenderer.on('projects-changed', (_e, reason) => callback(reason || 'project'));
   },
+  onLaunchSessionRequest: (callback) => {
+    ipcRenderer.on('launch-session-request', (_event, request) => callback(request));
+  },
   onStatusUpdate: (callback) => {
     ipcRenderer.on('status-update', (_event, text, type) => callback(text, type));
   },

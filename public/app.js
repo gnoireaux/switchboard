@@ -1480,6 +1480,18 @@ window.api.onProjectsChanged((reason) => {
   }, 300);
 });
 
+// A session started from outside the app (the launch socket). The main process
+// has already checked that the project is one Switchboard tracks.
+window.api.onLaunchSessionRequest(async (request) => {
+  const options = {};
+  if (request.initialPrompt) {
+    options.initialPrompt = request.initialPrompt;
+    options.initialPromptAutoSubmit = !!request.initialPromptAutoSubmit;
+  }
+  const defaults = await resolveDefaultSessionOptions({ projectPath: request.projectPath });
+  await launchNewSession({ projectPath: request.projectPath }, { ...defaults, ...options });
+});
+
 // Status bar
 let activityTimer = null;
 
