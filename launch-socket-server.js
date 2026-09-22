@@ -21,8 +21,12 @@ const TOKEN_FILE = 'launch-token';
 // A request bigger than this is junk or an attack, not a prompt.
 const MAX_REQUEST_BYTES = 64 * 1024;
 
-function defaultLaunchPaths(homeDir = os.homedir()) {
-  const dir = path.join(homeDir, '.switchboard');
+// The socket lives in the data dir, not the home dir: an instance started with
+// SWITCHBOARD_DATA_DIR is a separate app with its own sessions, and a caller
+// exporting the same variable reaches that instance rather than the installed
+// one. Both sides derive the path the same way, so neither hard-codes it.
+function defaultLaunchPaths(homeDir = os.homedir(), dataDir = process.env.SWITCHBOARD_DATA_DIR) {
+  const dir = dataDir ? path.resolve(dataDir) : path.join(homeDir, '.switchboard');
   return { dir, socketPath: path.join(dir, SOCKET_FILE), tokenPath: path.join(dir, TOKEN_FILE) };
 }
 

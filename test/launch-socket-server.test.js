@@ -36,6 +36,12 @@ test('the default paths live under ~/.switchboard', () => {
   assert.equal(paths.tokenPath, '/home/someone/.switchboard/launch-token');
 });
 
+test('SWITCHBOARD_DATA_DIR moves the socket to that instance\u2019s own data dir', () => {
+  const paths = defaultLaunchPaths('/home/someone', '/home/someone/.switchboard-dev');
+  assert.equal(paths.socketPath, '/home/someone/.switchboard-dev/launch.sock');
+  assert.equal(paths.tokenPath, '/home/someone/.switchboard-dev/launch-token');
+});
+
 test('the token file is created 0600 and reused on the next start', () => {
   const dir = tmpDir();
   const tokenPath = path.join(dir, 'nested', 'launch-token');
