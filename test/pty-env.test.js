@@ -12,7 +12,25 @@ test('strips Electron internals that break nested Electron / node-pty', () => {
     WT_SESSION: 'abc',
     PATH: '/usr/bin',
   });
-  assert.deepEqual(Object.keys(env).sort(), ['LC_CTYPE', 'PATH']);
+  assert.deepEqual(Object.keys(env).sort(), ['CLAUDE_CODE_FORCE_SESSION_PERSISTENCE', 'LC_CTYPE', 'PATH']);
+});
+
+test('the launching session\'s identity does not reach the session it starts', () => {
+  // Switchboard started from a shell inside a Claude session: the marker would
+  // turn every session it spawns into a transcript-less nested run, and the
+  // session id would point hooks at the wrong transcript.
+  const env = buildPtyEnv({
+    CLAUDE_CODE_CHILD_SESSION: '1',
+    CLAUDE_CODE_SESSION_ID: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+    CLAUDE_CODE_ENTRYPOINT: 'cli',
+    CLAUDE_CODE_MAX_OUTPUT_TOKENS: '8192',
+    PATH: '/usr/bin',
+  });
+  assert.equal(env.CLAUDE_CODE_CHILD_SESSION, undefined);
+  assert.equal(env.CLAUDE_CODE_SESSION_ID, undefined);
+  assert.equal(env.CLAUDE_CODE_ENTRYPOINT, undefined);
+  assert.equal(env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '8192', 'deliberate configuration is the user\'s');
+  assert.equal(env.CLAUDE_CODE_FORCE_SESSION_PERSISTENCE, '1', 'Switchboard needs the transcript');
 });
 
 test('sets a UTF-8 LC_CTYPE when the parent env has no locale at all', () => {
@@ -24,7 +42,7 @@ test('sets a UTF-8 LC_CTYPE when the parent env has no locale at all', () => {
 test('an inherited locale wins — we do not override the user', () => {
   for (const inherited of [{ LANG: 'de_DE.UTF-8' }, { LC_ALL: 'ja_JP.UTF-8' }, { LC_CTYPE: 'fr_FR.ISO8859-1' }]) {
     const env = buildPtyEnv({ ...inherited });
-    assert.deepEqual(env, inherited);
+    assert.deepEqual(env, { ...inherited, CLAUDE_CODE_FORCE_SESSION_PERSISTENCE: '1' });
   }
 });
 
