@@ -59,6 +59,7 @@ Turn either CLI off under **CLI Agents** in Settings. A switched-off CLI is not 
 - **Built-in terminal** — Connect to running sessions or launch new ones without leaving the app.
 - **Status notifications** — In-app alerts when a session is waiting for permission approval or user input.
 - **Session grid** — Live terminals for all open sessions on one screen.
+- **Initial prompt** — Start a session with its first prompt already typed in, ready for you to review and send.
 - **Per-CLI launch options** — Permission mode, worktree, sandbox, approval policy, model, and effort, set per session, per project, or globally.
 - **IDE emulation** (Claude only) — Review and edit Claude's proposed diffs in a side panel before they land.
 - **Projects** — Group work by what it is, not where it lives: a folder on disk, a brief the agent reads, a plan, a todo list, and the sessions filed under it.

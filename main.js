@@ -51,6 +51,7 @@ const {
   computeBlockedAgentNotifications,
   parseAgentsJson,
 } = require('./blocked-agent-notifications');
+const { INITIAL_PROMPT_FALLBACK_MS, encodeInitialPromptForPty } = require('./initial-prompt-delivery');
 
 
 
@@ -1280,6 +1281,23 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   return { archived: val };
 });
 
+// Writes a session's queued initial prompt into its PTY exactly once.
+function deliverPendingInitialPrompt(session, sessionId, trigger) {
+  if (!session || !session._pendingInitialPrompt || session.exited) return;
+  const payload = session._pendingInitialPrompt;
+  session._pendingInitialPrompt = null;
+  if (session._initialPromptTimer) {
+    clearTimeout(session._initialPromptTimer);
+    session._initialPromptTimer = null;
+  }
+  try {
+    session.pty.write(payload);
+    log.info(`[initial-prompt] session=${sessionId} delivered on ${trigger} (${payload.length} chars, not submitted)`);
+  } catch (err) {
+    log.error(`[initial-prompt] session=${sessionId} write failed: ${err?.message || String(err)}`);
+  }
+}
+
 // --- IPC: open-terminal ---
 ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, sessionOptions) => {
   if (!mainWindow) return { ok: false, error: 'no window' };
@@ -1552,6 +1570,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       spawnedAt: Date.now(),
     } : null,
     mcpServer, _openedAt: Date.now(),
+    _pendingInitialPrompt: isPlainTerminal ? null : encodeInitialPromptForPty(sessionOptions?.initialPrompt),
   };
   activeSessions.set(sessionId, session);
   if (session.activity) startTerminalActivitySweep();
@@ -1585,6 +1604,15 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   if (!isPlainTerminal && !session.projectId) {
     const meta = getMeta(session.realSessionId || sessionId);
     if (meta?.projectId) { session.projectId = meta.projectId; session.trackId = meta.trackId || null; }
+  }
+
+  // Type the initial prompt once the CLI is up, without submitting it — the
+  // human reads it and presses Enter. OSC 0 reporting idle is the signal that
+  // the input box exists; the timer covers a CLI that never reports one.
+  if (session._pendingInitialPrompt) {
+    session._initialPromptTimer = setTimeout(() => {
+      deliverPendingInitialPrompt(session, sessionId, 'timeout');
+    }, INITIAL_PROMPT_FALLBACK_MS);
   }
 
   ptyProcess.onData(data => {
@@ -1648,6 +1676,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
               mainWindow.webContents.send('cli-busy-state', currentId, false);
             }
           }
+          // Checked outside the branch above: a CLI that starts idle never goes
+          // busy first, so the transition alone would never fire.
+          if (isIdle) deliverPendingInitialPrompt(session, currentId, 'cli idle');
         }
       }
       // Parse iTerm2 OSC 9 sequences (terminated by BEL \x07 or ST \x1b\\)
@@ -1726,6 +1757,11 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
   ptyProcess.onExit(({ exitCode, signal }) => {
     session.exited = true;
+    session._pendingInitialPrompt = null;
+    if (session._initialPromptTimer) {
+      clearTimeout(session._initialPromptTimer);
+      session._initialPromptTimer = null;
+    }
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
     shutdownMcpServer(mcpId);

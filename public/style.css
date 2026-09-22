@@ -3612,6 +3612,13 @@ body { display: flex; flex-direction: column; }
   box-shadow: 0 0 0 3px rgba(120,130,255,0.08);
 }
 
+textarea.settings-input {
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.5;
+}
+
 .settings-input:disabled {
   opacity: 0.4;
   cursor: not-allowed;

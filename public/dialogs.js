@@ -180,6 +180,15 @@ async function showNewSessionDialog(project, runtime = 'claude') {
     <h3>New ${escapeHtml(runtime === 'codex' ? 'Codex' : runtime === 'claude' ? 'Claude' : runtime)} Session — ${escapeHtml(shortProjectPath(project.projectPath))}</h3>
     <div class="session-config-fields"></div>
     <div class="session-config-error" role="alert" hidden></div>
+    <div class="settings-field settings-field-wide">
+      <div class="settings-field-info">
+        <span class="settings-label">Initial Prompt</span>
+        <div class="settings-description">Typed into the session once it starts — you still press Enter to send it</div>
+      </div>
+      <div class="settings-field-control">
+        <textarea class="settings-input" id="nsd-initial-prompt" rows="3" placeholder="e.g. /stream-handoffs--chain-sessions continue /path/to/chain-.../"></textarea>
+      </div>
+    </div>
     <div class="new-session-actions">
       <button type="button" class="new-session-cancel-btn">Cancel</button>
       <button type="button" class="new-session-start-btn">Start</button>
@@ -195,6 +204,8 @@ async function showNewSessionDialog(project, runtime = 'claude') {
       error.textContent = err.message; error.hidden = false;
       return;
     }
+    const initialPrompt = dialog.querySelector('#nsd-initial-prompt').value.trim();
+    if (initialPrompt) options.initialPrompt = initialPrompt;
     close();
     launchNewSession(project, { ...options, runtime });
   }
