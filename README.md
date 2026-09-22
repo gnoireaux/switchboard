@@ -103,6 +103,7 @@ Switchboard watches every session in the background, Claude and Codex alike, and
 - **Waiting for input** — A session that needs your response is highlighted.
 - **Permission approval** — A session blocked on a permission grant or approval gets a badge immediately. Switchboard reads each CLI's own wording, so Claude's permission prompts and Codex's approval requests both register.
 - **Activity indicators** — See which sessions are running, idle, or finished.
+- **Sessions started elsewhere** — Switchboard also polls the Claude CLI for sessions it isn't hosting (started in another terminal, or running as background agents) and flags the ones blocked on a permission prompt or waiting for input.
 
 ### Session grid
 

@@ -45,6 +45,13 @@ const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
 const { lastAssistantMessage } = require('./session-preview');
+const { spawn: spawnChildProcess } = require('child_process');
+const {
+  AGENT_POLL_INTERVAL_MS,
+  computeBlockedAgentNotifications,
+  parseAgentsJson,
+} = require('./blocked-agent-notifications');
+
 
 
 // --- Auto-updater (only in packaged builds) ---
@@ -2105,6 +2112,105 @@ function startHarnessWatchers() {
   }
 }
 
+// --- Blocked-agent poller ---
+//
+// Sessions hosted by Switchboard announce "needs attention" through the OSC 9
+// sequences we parse off their PTY. Sessions started outside Switchboard emit
+// those sequences into a terminal we never read, so poll `claude agents --json`
+// and raise the same 'terminal-notification' for them.
+let blockedAgentTimer = null;
+let blockedAgentReasons = new Map();
+let blockedAgentPollInFlight = false;
+let blockedAgentPollFailureLogged = false;
+
+const AGENT_POLL_TIMEOUT_MS = 8000;
+
+function hostedSessionIds() {
+  const ids = new Set();
+  for (const [sessionId, session] of activeSessions) {
+    if (session.exited) continue;
+    ids.add(sessionId);
+    if (session.realSessionId) ids.add(session.realSessionId);
+  }
+  return ids;
+}
+
+function logBlockedAgentPollFailure(detail) {
+  if (blockedAgentPollFailureLogged) return;
+  blockedAgentPollFailureLogged = true;
+  log.warn(`[agents] poll failed, will keep retrying quietly: ${detail}`);
+}
+
+function pollBlockedAgents() {
+  if (blockedAgentPollInFlight) return;
+  blockedAgentPollInFlight = true;
+
+  // 'auto' rather than the configured profile: a WSL shell would list the
+  // sessions of a different filesystem than the one Switchboard reads.
+  const profile = resolveShell('auto');
+  const shell = profile.path;
+  const args = shellArgs(shell, 'claude agents --json', profile.args || []);
+
+  let child;
+  try {
+    child = spawnChildProcess(shell, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...cleanPtyEnv, FORCE_COLOR: '0' },
+    });
+  } catch (err) {
+    blockedAgentPollInFlight = false;
+    logBlockedAgentPollFailure(err?.message || String(err));
+    return;
+  }
+
+  let stdout = '';
+  let stderr = '';
+  child.stdout.on('data', (data) => { stdout += data.toString(); });
+  child.stderr.on('data', (data) => { stderr += data.toString(); });
+
+  const killTimer = setTimeout(() => { try { child.kill(); } catch {} }, AGENT_POLL_TIMEOUT_MS);
+
+  child.on('error', (err) => {
+    clearTimeout(killTimer);
+    blockedAgentPollInFlight = false;
+    logBlockedAgentPollFailure(err?.message || String(err));
+  });
+
+  child.on('close', (code) => {
+    clearTimeout(killTimer);
+    blockedAgentPollInFlight = false;
+
+    const agents = parseAgentsJson(stdout);
+    if (!agents) {
+      // Keep the previous reasons: dropping them would re-notify every session
+      // once the CLI answers again.
+      logBlockedAgentPollFailure(`exit ${code}, unparseable output${stderr.trim() ? `: ${stderr.trim().slice(0, 200)}` : ''}`);
+      return;
+    }
+    blockedAgentPollFailureLogged = false;
+
+    const { notifications, reasons } = computeBlockedAgentNotifications({
+      agents,
+      hostedSessionIds: hostedSessionIds(),
+      previousReasons: blockedAgentReasons,
+    });
+    blockedAgentReasons = reasons;
+
+    for (const notification of notifications) {
+      log.info(`[agents] session=${notification.sessionId} reason="${notification.reason}" cwd=${notification.cwd || '?'}`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('terminal-notification', notification.sessionId, notification.message);
+      }
+    }
+  });
+}
+
+function startBlockedAgentsPoller() {
+  if (blockedAgentTimer) return;
+  pollBlockedAgents();
+  blockedAgentTimer = setInterval(pollBlockedAgents, AGENT_POLL_INTERVAL_MS);
+}
+
 // --- IPC: app version ---
 ipcMain.handle('get-app-version', () => app.getVersion());
 
@@ -2193,6 +2299,7 @@ function startScheduleTicker() {
     createWindow();
     startProjectsWatcher();
     startHarnessWatchers();
+    startBlockedAgentsPoller();
     // Retry legacy imports each launch; successful files are remembered in
     // the DB, including deleted tasks. Missing folders can be picked up later.
     // Then tick once a minute and launch due tasks through the renderer.
@@ -2230,6 +2337,11 @@ app.on('before-quit', () => {
   // Shut down all MCP servers
   shutdownAllMcp();
   taskManager.shutdown();
+
+  if (blockedAgentTimer) {
+    clearInterval(blockedAgentTimer);
+    blockedAgentTimer = null;
+  }
 
   // Close filesystem watcher
   if (projectsWatcher) {
