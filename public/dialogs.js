@@ -183,10 +183,19 @@ async function showNewSessionDialog(project, runtime = 'claude') {
     <div class="settings-field settings-field-wide">
       <div class="settings-field-info">
         <span class="settings-label">Initial Prompt</span>
-        <div class="settings-description">Typed into the session once it starts — you still press Enter to send it</div>
+        <div class="settings-description">Typed into the session once it starts</div>
       </div>
       <div class="settings-field-control">
         <textarea class="settings-input" id="nsd-initial-prompt" rows="3" placeholder="e.g. /stream-handoffs--chain-sessions continue /path/to/chain-.../"></textarea>
+      </div>
+    </div>
+    <div class="settings-field">
+      <div class="settings-field-info">
+        <span class="settings-label">Send Initial Prompt</span>
+        <div class="settings-description">Press Enter for you, so a chained session needs no keystroke</div>
+      </div>
+      <div class="settings-field-control">
+        <label class="settings-toggle"><input type="checkbox" id="nsd-initial-prompt-submit"><span class="settings-toggle-slider"></span></label>
       </div>
     </div>
     <div class="new-session-actions">
@@ -205,7 +214,10 @@ async function showNewSessionDialog(project, runtime = 'claude') {
       return;
     }
     const initialPrompt = dialog.querySelector('#nsd-initial-prompt').value.trim();
-    if (initialPrompt) options.initialPrompt = initialPrompt;
+    if (initialPrompt) {
+      options.initialPrompt = initialPrompt;
+      options.initialPromptAutoSubmit = dialog.querySelector('#nsd-initial-prompt-submit').checked;
+    }
     close();
     launchNewSession(project, { ...options, runtime });
   }

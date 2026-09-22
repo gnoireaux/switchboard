@@ -55,3 +55,31 @@ test('an empty, blank, or non-string prompt means nothing is written', () => {
   assert.equal(encodeInitialPromptForPty(42), null);
   assert.equal(encodeInitialPromptForPty('\r\r\r'), null);
 });
+
+const {
+  SUBMIT_KEY, INITIAL_PROMPT_SUBMIT_DELAY_MS, buildInitialPromptWrites,
+} = require('../initial-prompt-delivery');
+
+test('without auto-submit the only write is the typed prompt', () => {
+  const writes = buildInitialPromptWrites('continue the chain');
+  assert.deepEqual(writes, [{ payload: 'continue the chain', delayMs: 0 }]);
+});
+
+test('auto-submit adds the submit key as a separate, delayed write', () => {
+  const writes = buildInitialPromptWrites('continue the chain', { autoSubmit: true });
+  assert.equal(writes.length, 2);
+  assert.deepEqual(writes[0], { payload: 'continue the chain', delayMs: 0 });
+  assert.deepEqual(writes[1], { payload: SUBMIT_KEY, delayMs: INITIAL_PROMPT_SUBMIT_DELAY_MS });
+  assert.ok(INITIAL_PROMPT_SUBMIT_DELAY_MS > 0, 'the submit must not race the paste');
+});
+
+test('the submit key is never part of the typed prompt, even under auto-submit', () => {
+  const writes = buildInitialPromptWrites('line one\r\nline two\rrm -rf /', { autoSubmit: true });
+  assert.ok(!writes[0].payload.includes(SUBMIT_KEY));
+  assert.equal(writes.filter(w => w.payload === SUBMIT_KEY).length, 1);
+});
+
+test('an empty prompt writes nothing, auto-submit or not', () => {
+  assert.equal(buildInitialPromptWrites('   ', { autoSubmit: true }), null);
+  assert.equal(buildInitialPromptWrites(null, { autoSubmit: true }), null);
+});

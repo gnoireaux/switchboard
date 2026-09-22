@@ -1,17 +1,32 @@
 // Encodes a session's initial prompt for injection into a freshly started
 // Claude CLI PTY.
 //
-// The prompt is typed into the CLI's input box and deliberately NOT submitted:
-// the human reads it and presses Enter. That is the whole safety model for
-// prompts that arrive from outside the app (a successor launched by another
-// session, a future URL handler), so the encoder has to make "not submitted"
-// true for any input, not just well-behaved ones.
+// Two modes:
+//  - typed only (default): the prompt lands in the CLI's input box and the
+//    human presses Enter. That is what an untrusted origin gets.
+//  - auto-submit: a trusted origin (the human typing into the new-session
+//    dialog, or a caller holding the launch socket's 0600 token) may ask for
+//    the prompt to be sent too, so two sessions chained on one mission need no
+//    keystroke at all.
+//
+// Either way the prompt itself can never submit: the sanitizer strips CR and
+// ESC, so the only carriage return that ever reaches the PTY is SUBMIT_KEY,
+// written deliberately by the caller.
 
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
 
 // How long to wait for the CLI to report itself idle before injecting anyway.
 const INITIAL_PROMPT_FALLBACK_MS = 20000;
+
+// The key that sends the prompt. Written as a separate PTY write, never as
+// part of the encoded prompt.
+const SUBMIT_KEY = '\r';
+
+// Settle margin between the paste and the submit key: the CLI renders a
+// bracketed paste asynchronously, and a CR that arrives mid-paste is read as
+// part of it. Not measured — raise it if a submit is ever seen landing early.
+const INITIAL_PROMPT_SUBMIT_DELAY_MS = 250;
 
 // Drops every C0 control character except newline and tab. Carriage return is
 // the important one — it would submit the prompt — but ESC matters just as
@@ -36,8 +51,22 @@ function encodeInitialPromptForPty(prompt) {
   return BRACKETED_PASTE_START + clean + BRACKETED_PASTE_END;
 }
 
+// The full write sequence for a queued prompt: the typed prompt, then — only
+// for a trusted origin that asked for it — the submit key as a separate,
+// delayed write. Returns null when there is nothing to type.
+function buildInitialPromptWrites(prompt, { autoSubmit = false } = {}) {
+  const payload = encodeInitialPromptForPty(prompt);
+  if (payload === null) return null;
+  const writes = [{ payload, delayMs: 0 }];
+  if (autoSubmit) writes.push({ payload: SUBMIT_KEY, delayMs: INITIAL_PROMPT_SUBMIT_DELAY_MS });
+  return writes;
+}
+
 module.exports = {
   INITIAL_PROMPT_FALLBACK_MS,
+  INITIAL_PROMPT_SUBMIT_DELAY_MS,
+  SUBMIT_KEY,
   sanitizeInitialPrompt,
   encodeInitialPromptForPty,
+  buildInitialPromptWrites,
 };

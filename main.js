@@ -51,7 +51,7 @@ const {
   computeBlockedAgentNotifications,
   parseAgentsJson,
 } = require('./blocked-agent-notifications');
-const { INITIAL_PROMPT_FALLBACK_MS, encodeInitialPromptForPty } = require('./initial-prompt-delivery');
+const { INITIAL_PROMPT_FALLBACK_MS, buildInitialPromptWrites } = require('./initial-prompt-delivery');
 
 
 
@@ -1281,20 +1281,37 @@ ipcMain.handle('archive-session', (_event, sessionId, archived) => {
   return { archived: val };
 });
 
-// Writes a session's queued initial prompt into its PTY exactly once.
+// Writes a session's queued initial prompt into its PTY exactly once. The
+// sequence is one write for the typed prompt and, when the launch asked for
+// auto-submit, a second delayed write of the submit key.
 function deliverPendingInitialPrompt(session, sessionId, trigger) {
   if (!session || !session._pendingInitialPrompt || session.exited) return;
-  const payload = session._pendingInitialPrompt;
+  const [first, ...rest] = session._pendingInitialPrompt;
   session._pendingInitialPrompt = null;
   if (session._initialPromptTimer) {
     clearTimeout(session._initialPromptTimer);
     session._initialPromptTimer = null;
   }
   try {
-    session.pty.write(payload);
-    log.info(`[initial-prompt] session=${sessionId} delivered on ${trigger} (${payload.length} chars, not submitted)`);
+    session.pty.write(first.payload);
+    log.info(`[initial-prompt] session=${sessionId} delivered on ${trigger} (${first.payload.length} chars, ${rest.length ? 'auto-submit pending' : 'not submitted'})`);
   } catch (err) {
     log.error(`[initial-prompt] session=${sessionId} write failed: ${err?.message || String(err)}`);
+    return;
+  }
+  for (const write of rest) {
+    // Delayed and separate: a submit key inside the paste would be swallowed
+    // by it. Re-checks `exited` — the session can die in the meantime.
+    session._initialPromptSubmitTimer = setTimeout(() => {
+      session._initialPromptSubmitTimer = null;
+      if (session.exited) return;
+      try {
+        session.pty.write(write.payload);
+        log.info(`[initial-prompt] session=${sessionId} submitted`);
+      } catch (err) {
+        log.error(`[initial-prompt] session=${sessionId} submit failed: ${err?.message || String(err)}`);
+      }
+    }, write.delayMs);
   }
 }
 
@@ -1570,7 +1587,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       spawnedAt: Date.now(),
     } : null,
     mcpServer, _openedAt: Date.now(),
-    _pendingInitialPrompt: isPlainTerminal ? null : encodeInitialPromptForPty(sessionOptions?.initialPrompt),
+    _pendingInitialPrompt: isPlainTerminal ? null : buildInitialPromptWrites(sessionOptions?.initialPrompt, {
+      autoSubmit: !!sessionOptions?.initialPromptAutoSubmit,
+    }),
   };
   activeSessions.set(sessionId, session);
   if (session.activity) startTerminalActivitySweep();
@@ -1606,9 +1625,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (meta?.projectId) { session.projectId = meta.projectId; session.trackId = meta.trackId || null; }
   }
 
-  // Type the initial prompt once the CLI is up, without submitting it — the
-  // human reads it and presses Enter. OSC 0 reporting idle is the signal that
-  // the input box exists; the timer covers a CLI that never reports one.
+  // Type the initial prompt once the CLI is up. It is submitted only when the
+  // launch request asked for it (trusted origin); otherwise the human reads it
+  // and presses Enter. OSC 0 reporting idle is the signal that the input box
+  // exists; the timer covers a CLI that never reports one.
   if (session._pendingInitialPrompt) {
     session._initialPromptTimer = setTimeout(() => {
       deliverPendingInitialPrompt(session, sessionId, 'timeout');
@@ -1761,6 +1781,10 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
     if (session._initialPromptTimer) {
       clearTimeout(session._initialPromptTimer);
       session._initialPromptTimer = null;
+    }
+    if (session._initialPromptSubmitTimer) {
+      clearTimeout(session._initialPromptSubmitTimer);
+      session._initialPromptSubmitTimer = null;
     }
     // Clean up MCP server
     const mcpId = session.realSessionId || sessionId;
