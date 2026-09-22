@@ -642,10 +642,14 @@ test('a codex fork is matched by its parent, not the inherited tag', () => {
 });
 
 // --- initialPrompt (project page: start a session on a phase or a todo) ---
-test('initialPrompt is the last positional argument for a fresh session only', () => {
+test('initialPrompt never reaches the command line — the PTY types it', () => {
   const H = typeof claude !== 'undefined' ? claude : codex;
+  // A prompt on the command line is submitted by the CLI itself, which both
+  // duplicates the copy initial-prompt-delivery.js types into the input box and
+  // takes the "typed but not sent" mode away. It also shows the whole prompt in
+  // `ps` output. Delivery belongs to the PTY alone.
   const fresh = H.buildLaunchArgs({ sessionId: 'abc', isNew: true, options: { initialPrompt: 'Work on phase 2' } });
-  assert.equal(fresh[fresh.length - 1], 'Work on phase 2');
+  assert.ok(!fresh.includes('Work on phase 2'), 'a fresh session gets its prompt typed, not argued');
   const resumed = H.buildLaunchArgs({ sessionId: 'abc', isNew: false, options: { initialPrompt: 'Work on phase 2' } });
   assert.ok(!resumed.includes('Work on phase 2'), 'a resume keeps its conversation');
   const forked = H.buildLaunchArgs({ sessionId: 'new', isNew: true, options: { forkFrom: 'src', initialPrompt: 'x' } });

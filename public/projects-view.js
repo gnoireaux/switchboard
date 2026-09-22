@@ -1603,6 +1603,8 @@ function startItemRows(project, track, prompt, planItem) {
     const options = await resolveDefaultSessionOptions(target);
     options.runtime = runtime;
     options.initialPrompt = prompt;
+    // Clicking the item is the ask; the session starts working straight away.
+    options.initialPromptAutoSubmit = true;
     options.planItem = planItem;
     launchNewSession(target, options);
   };

@@ -75,6 +75,8 @@ async function launchScheduledSession(launch) {
   const options = SessionConfig.resolveOptions(runtimeId, defaults, schedule.sessionConfig?.[runtimeId] || {});
   options.runtime = runtimeId;
   options.initialPrompt = schedule.prompt;
+  // Nobody is watching when a schedule fires, so its prompt sends itself.
+  options.initialPromptAutoSubmit = true;
   options.scheduleId = schedule.id;
   await launchNewSession(target, options, { focus: false });
 }

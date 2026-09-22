@@ -1319,7 +1319,7 @@ Do the task.`);
     assert.equal(args[args.indexOf('--allowedTools') + 1], saved.allowedTools);
     assert.equal(args[args.indexOf('--append-system-prompt') + 1], saved.appendSystemPrompt);
     assert.deepEqual(args.slice(args.indexOf('--add-dir'), args.indexOf('--add-dir') + 4), ['--add-dir', '/one', '--add-dir', '/two']);
-    assert.equal(args.at(-1), row.prompt);
+    assert.ok(!args.includes(row.prompt), 'the prompt is typed into the PTY, not passed as an argument');
     assert.deepEqual(projects.updateSchedule(row.id, { sessionConfig: row.sessionConfig }).schedule.sessionConfig, row.sessionConfig);
     projects.updateSchedule(row.id, { sessionConfig: { claude: { permissionMode: 'plan' } } });
     assert.equal(projects.importLegacySchedules([source]), 0);

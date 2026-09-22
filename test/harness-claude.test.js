@@ -319,7 +319,7 @@ test('a missing file yields nothing rather than throwing', () => {
 });
 
 // --- initialPrompt (project page: start a session on a phase or a todo) ---
-test('a scheduled prompt is not consumed by multi-value directory or tool options', () => {
+test('a scheduled prompt stays off the command line whatever else is on it', () => {
   const prompt = 'Investigate the latest alarm.\nRead the logs and summarize findings.';
   for (const addDirs of ['/attached', ' /repo one , , /repo two ']) {
     for (const allowedTools of ['', 'Read,Bash']) {
@@ -330,14 +330,13 @@ test('a scheduled prompt is not consumed by multi-value directory or tool option
         });
         // Main can append --ide after the harness arguments.
         if (ide) args.push('--ide');
-        assert.ok(args.includes(prompt), 'the first message is present');
-        // Claude consumes every non-option after a variadic flag, even quoted
-        // multi-line text. Check that each list ends before reaching the prompt.
+        assert.ok(!args.includes(prompt), 'the first message is typed into the PTY, not argued');
+        // Claude consumes every non-option after a variadic flag, so each list
+        // must still end where the next option starts.
         for (let i = 0; i < args.length; i++) {
           if (!['--add-dir', '--allowedTools'].includes(args[i])) continue;
           const values = [];
           for (let j = i + 1; j < args.length && !args[j].startsWith('--'); j++) values.push(args[j]);
-          assert.ok(!values.includes(prompt), `${args[i]} must not consume the first message`);
           if (args[i] === '--add-dir') assert.equal(values.length, 1, 'each directory remains a separate argument');
         }
       }
@@ -345,10 +344,14 @@ test('a scheduled prompt is not consumed by multi-value directory or tool option
   }
 });
 
-test('initialPrompt is the last positional argument for a fresh session only', () => {
+test('initialPrompt never reaches the command line — the PTY types it', () => {
   const H = typeof claude !== 'undefined' ? claude : codex;
+  // A prompt on the command line is submitted by the CLI itself, which both
+  // duplicates the copy initial-prompt-delivery.js types into the input box and
+  // takes the "typed but not sent" mode away. It also shows the whole prompt in
+  // `ps` output. Delivery belongs to the PTY alone.
   const fresh = H.buildLaunchArgs({ sessionId: 'abc', isNew: true, options: { initialPrompt: 'Work on phase 2' } });
-  assert.equal(fresh[fresh.length - 1], 'Work on phase 2');
+  assert.ok(!fresh.includes('Work on phase 2'), 'a fresh session gets its prompt typed, not argued');
   const resumed = H.buildLaunchArgs({ sessionId: 'abc', isNew: false, options: { initialPrompt: 'Work on phase 2' } });
   assert.ok(!resumed.includes('Work on phase 2'), 'a resume keeps its conversation');
   const forked = H.buildLaunchArgs({ sessionId: 'new', isNew: true, options: { forkFrom: 'src', initialPrompt: 'x' } });
