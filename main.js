@@ -2315,6 +2315,17 @@ function startBlockedAgentsPoller() {
   blockedAgentTimer = setInterval(pollBlockedAgents, AGENT_POLL_INTERVAL_MS);
 }
 
+// Polling starts only once the renderer has drawn its sidebar: a notification
+// sent earlier is either lost (no listener yet) or finds no row and turns into
+// a native notification, and being edge-triggered it would never be resent.
+// A renderer reload lost its badges too, so forget what was sent and poll again.
+ipcMain.on('sidebar-ready', () => {
+  blockedAgentReasons = new Map();
+  blockedAgentPendingNative.clear();
+  if (blockedAgentTimer) pollBlockedAgents();
+  else startBlockedAgentsPoller();
+});
+
 // --- Launch socket: a running session hands its successor to Switchboard ---
 let launchSocket = null;
 
@@ -2440,7 +2451,7 @@ function startScheduleTicker() {
     createWindow();
     startProjectsWatcher();
     startHarnessWatchers();
-    startBlockedAgentsPoller();
+    // startBlockedAgentsPoller() runs on the renderer's 'sidebar-ready'.
     startLaunchSocket();
     // Retry legacy imports each launch; successful files are remembered in
     // the DB, including deleted tasks. Missing folders can be picked up later.

@@ -1438,6 +1438,9 @@ setTimeout(() => {
 })();
 
 loadProjects().then(async () => {
+  // Sidebar rows exist now, so main may start badging blocked sessions (it
+  // falls back to a native notification when a session has no row).
+  window.api.reportSidebarReady();
   // Open the tab the user was last working in.
   const lastTab = rememberedTab();
   if (lastTab !== activeTab) document.querySelector(`.sidebar-tab[data-tab="${lastTab}"]`)?.click();

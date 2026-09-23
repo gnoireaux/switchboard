@@ -95,6 +95,7 @@ contextBridge.exposeInMainWorld('api', {
   resizeTerminal: (id, cols, rows) => ipcRenderer.send('terminal-resize', id, cols, rows),
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
   reportBlockedSessionRowless: (id) => ipcRenderer.send('blocked-session-rowless', id),
+  reportSidebarReady: () => ipcRenderer.send('sidebar-ready'),
   sendTaskInput: (projectPath, label, data) => ipcRenderer.send('task-input', projectPath, label, data),
   resizeTask: (projectPath, label, cols, rows) => ipcRenderer.send('task-resize', projectPath, label, cols, rows),
 
