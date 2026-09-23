@@ -45,6 +45,7 @@ const { PREVIEW_SCHEME, PREVIEW_SCHEMES, handlePreviewAssetRequest } = require('
 protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
 const { lastAssistantMessage } = require('./session-preview');
+const { instanceLabel } = require('./instance-label');
 const { spawn: spawnChildProcess } = require('child_process');
 const {
   AGENT_POLL_INTERVAL_MS,
@@ -154,11 +155,19 @@ function createWindow() {
     }
   }
 
+  const windowTitle = instanceLabel({
+    execPath: process.execPath,
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    buildLabel: require('./package.json').buildLabel,
+    dataDir: process.env.SWITCHBOARD_DATA_DIR,
+  });
+
   mainWindow = new BrowserWindow({
     ...bounds,
     minWidth: 800,
     minHeight: 500,
-    title: 'Switchboard',
+    title: windowTitle,
     icon: path.join(__dirname, 'build', 'icon.png'),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -172,6 +181,9 @@ function createWindow() {
   if (restorePosition) {
     mainWindow.setBounds({ ...restorePosition, width: bounds.width, height: bounds.height });
   }
+
+  // index.html's <title> would otherwise replace the instance label on load.
+  mainWindow.on('page-title-updated', (event) => event.preventDefault());
 
   mainWindow.loadFile(path.join(__dirname, 'public', 'index.html'));
 
