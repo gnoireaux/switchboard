@@ -2201,6 +2201,9 @@ let blockedAgentPollFailureLogged = false;
 // Last notification sent to the renderer per session, kept until the renderer
 // says whether it had a sidebar row to badge (see 'blocked-session-rowless').
 const blockedAgentPendingNative = new Map();
+// Shown notifications stay referenced until closed: a collected one loses its
+// click handler.
+const blockedAgentShownNative = new Set();
 
 const AGENT_POLL_TIMEOUT_MS = 8000;
 
@@ -2300,11 +2303,18 @@ ipcMain.on('blocked-session-rowless', (_event, sessionId) => {
   if (!pending || !Notification.isSupported()) return;
   const { title, body } = nativeNotificationForAgent({ ...pending, homeDir: os.homedir() });
   const notification = new Notification({ title, body });
+  blockedAgentShownNative.add(notification);
   notification.on('click', () => {
+    blockedAgentShownNative.delete(notification);
     if (!mainWindow || mainWindow.isDestroyed()) return;
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
   });
+  notification.on('close', () => blockedAgentShownNative.delete(notification));
+  // 'show' is macOS's confirmation that the banner was handed to Notification
+  // Center; its absence after the line below means the OS refused it.
+  notification.on('show', () => log.info(`[agents] native notification shown session=${sessionId}`));
+  notification.on('failed', (_e, error) => log.warn(`[agents] native notification failed session=${sessionId}: ${error}`));
   notification.show();
   log.info(`[agents] native notification session=${sessionId} reason="${pending.reason}" (no sidebar row)`);
 });
