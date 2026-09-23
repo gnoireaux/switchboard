@@ -39,6 +39,21 @@ function notificationMessageForReason(reason) {
   return 'Claude Code needs your attention';
 }
 
+// Text for the native OS notification raised when the renderer has no sidebar
+// row to badge (session archived, filtered out, or in a folder not indexed).
+// The cwd is what identifies such a session, so it goes in the body in full.
+function nativeNotificationForAgent({ reason, name, cwd, homeDir }) {
+  const title = reason === WAITING_FOR_PERMISSION ? 'Claude needs your permission'
+    : reason === WAITING_FOR_INPUT ? 'Claude needs your input'
+    : 'Claude session is blocked';
+  let where = typeof cwd === 'string' && cwd ? cwd : null;
+  if (where && homeDir && (where === homeDir || where.startsWith(homeDir + '/'))) {
+    where = '~' + where.slice(homeDir.length);
+  }
+  const body = [typeof name === 'string' && name ? name : null, where].filter(Boolean).join('\n');
+  return { title, body: body || 'Session outside the sidebar' };
+}
+
 // Pure diff step: given this tick's agent list, which sessions Switchboard hosts,
 // and the reasons recorded last tick, return the notifications to raise now and
 // the reasons to remember for the next tick.
@@ -96,6 +111,7 @@ module.exports = {
   AGENT_POLL_INTERVAL_MS,
   attentionReasonForAgent,
   notificationMessageForReason,
+  nativeNotificationForAgent,
   computeBlockedAgentNotifications,
   parseAgentsJson,
 };

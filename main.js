@@ -1,4 +1,4 @@
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, protocol, screen, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, protocol, screen, shell } = require('electron');
 const { Worker } = require('worker_threads');
 const path = require('path');
 const fs = require('fs');
@@ -51,6 +51,7 @@ const {
   AGENT_POLL_INTERVAL_MS,
   computeBlockedAgentNotifications,
   parseAgentsJson,
+  nativeNotificationForAgent,
 } = require('./blocked-agent-notifications');
 const { INITIAL_PROMPT_FALLBACK_MS, buildInitialPromptWrites } = require('./initial-prompt-delivery');
 const {
@@ -2197,6 +2198,9 @@ let blockedAgentTimer = null;
 let blockedAgentReasons = new Map();
 let blockedAgentPollInFlight = false;
 let blockedAgentPollFailureLogged = false;
+// Last notification sent to the renderer per session, kept until the renderer
+// says whether it had a sidebar row to badge (see 'blocked-session-rowless').
+const blockedAgentPendingNative = new Map();
 
 const AGENT_POLL_TIMEOUT_MS = 8000;
 
@@ -2276,11 +2280,34 @@ function pollBlockedAgents() {
       if (mainWindow && !mainWindow.isDestroyed()) {
         // The renderer badges only notifications of kind 'attention'; every
         // blocked agent is one, so no harness classification is needed.
+        blockedAgentPendingNative.set(notification.sessionId, notification);
         mainWindow.webContents.send('terminal-notification', notification.sessionId, notification.message, 'attention');
       }
     }
+    // A session that stopped waiting before the renderer answered needs no alert.
+    for (const sessionId of blockedAgentPendingNative.keys()) {
+      if (!reasons.has(sessionId)) blockedAgentPendingNative.delete(sessionId);
+    }
   });
 }
+
+// The renderer badges a blocked session's sidebar row. When there is no row
+// (archived, hidden by a filter, or its folder isn't indexed) the badge would be
+// invisible, so fall back to a native notification.
+ipcMain.on('blocked-session-rowless', (_event, sessionId) => {
+  const pending = blockedAgentPendingNative.get(sessionId);
+  blockedAgentPendingNative.delete(sessionId);
+  if (!pending || !Notification.isSupported()) return;
+  const { title, body } = nativeNotificationForAgent({ ...pending, homeDir: os.homedir() });
+  const notification = new Notification({ title, body });
+  notification.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+  });
+  notification.show();
+  log.info(`[agents] native notification session=${sessionId} reason="${pending.reason}" (no sidebar row)`);
+});
 
 function startBlockedAgentsPoller() {
   if (blockedAgentTimer) return;

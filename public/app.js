@@ -478,7 +478,11 @@ window.api.onTerminalNotification((sessionId, message, kind) => {
     attentionSessions.add(sessionId);
     bumpSessionEvent(sessionId);
     // The same session can be on screen in both tabs.
-    document.querySelectorAll(`.session-item[data-session-id="${sessionId}"]`).forEach(item => item.classList.add('needs-attention'));
+    const rows = document.querySelectorAll(`.session-item[data-session-id="${sessionId}"]`);
+    rows.forEach(item => item.classList.add('needs-attention'));
+    // No row to badge: main raises a native notification instead (it ignores
+    // sessions it didn't learn about from `claude agents`).
+    if (rows.length === 0) window.api.reportBlockedSessionRowless(sessionId);
     if (typeof updateProjectStatusDots === 'function') updateProjectStatusDots();
   } else if (kind === 'idle') {
     // A completion notification is authoritative even if a quick turn never

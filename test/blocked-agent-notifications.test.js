@@ -5,6 +5,7 @@ const {
   attentionReasonForAgent,
   computeBlockedAgentNotifications,
   parseAgentsJson,
+  nativeNotificationForAgent,
 } = require('../blocked-agent-notifications');
 
 // Samples copied from real `claude agents --json` output (2026-09-22).
@@ -166,4 +167,20 @@ test('agent JSON survives a login shell printing a banner before the array', () 
   assert.equal(parseAgentsJson(''), null);
   assert.equal(parseAgentsJson('command not found: claude'), null);
   assert.equal(parseAgentsJson('{"error":"nope"}'), null);
+});
+
+test('native notification names the reason, the session and its folder', () => {
+  assert.deepEqual(nativeNotificationForAgent({
+    reason: 'permission prompt', name: 'gnrx-51', cwd: '/Users/me/src/app', homeDir: '/Users/me',
+  }), { title: 'Claude needs your permission', body: 'gnrx-51\n~/src/app' });
+  assert.deepEqual(nativeNotificationForAgent({
+    reason: 'input needed', name: null, cwd: '/Users/me', homeDir: '/Users/me',
+  }), { title: 'Claude needs your input', body: '~' });
+});
+
+test('native notification keeps paths outside home, and never has an empty body', () => {
+  assert.deepEqual(nativeNotificationForAgent({
+    reason: 'blocked', name: '', cwd: '/Users/meow/x', homeDir: '/Users/me',
+  }), { title: 'Claude session is blocked', body: '/Users/meow/x' });
+  assert.equal(nativeNotificationForAgent({ reason: 'blocked' }).body, 'Session outside the sidebar');
 });
