@@ -2262,7 +2262,9 @@ function pollBlockedAgents() {
     for (const notification of notifications) {
       log.info(`[agents] session=${notification.sessionId} reason="${notification.reason}" cwd=${notification.cwd || '?'}`);
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('terminal-notification', notification.sessionId, notification.message);
+        // The renderer badges only notifications of kind 'attention'; every
+        // blocked agent is one, so no harness classification is needed.
+        mainWindow.webContents.send('terminal-notification', notification.sessionId, notification.message, 'attention');
       }
     }
   });

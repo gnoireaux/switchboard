@@ -30,8 +30,9 @@ function attentionReasonForAgent(agent) {
   return 'blocked';
 }
 
-// Phrased to match the Claude CLI notification strings the renderer already
-// classifies (see the regex in public/app.js onTerminalNotification).
+// Phrased like the Claude CLI's own notifications, since the text is shown in
+// the terminal header. The badge does not depend on it: main sends these with
+// kind 'attention' (see pollBlockedAgents in main.js).
 function notificationMessageForReason(reason) {
   if (reason === WAITING_FOR_PERMISSION) return 'Claude needs your permission to continue';
   if (reason === WAITING_FOR_INPUT) return 'Claude Code needs your attention — input needed';
