@@ -184,6 +184,20 @@ function quoteArgvForShell(shellPath, argv) {
   return argv.map(a => quoteArgForShell(shellPath, a)).join(' ');
 }
 
+// The binary name prefixed so the shell runs the real executable rather than a
+// user alias or function of the same name. An alias such as
+// `claude=claude --verbose` puts a flag before a subcommand, and
+// `claude --verbose attach <id>` then starts a new session whose prompt is
+// "attach <id>". Flags-only invocations are indifferent, so this is only
+// needed where the argv starts with a subcommand.
+function binaryBypassingShellAliases(shellPath, binary) {
+  const base = path.basename(shellPath).toLowerCase();
+  if (base === 'nu') return '^' + binary;
+  const isPosixOrFish = base.includes('bash') || base.includes('zsh') || base === 'sh' || base === 'dash'
+    || base === 'ksh' || base === 'fish' || isWslShell(shellPath);
+  return isPosixOrFish ? 'command ' + binary : binary;
+}
+
 // Returns spawn args appropriate for the resolved shell
 function shellArgs(shellPath, cmd, extraArgs) {
   const base = path.basename(shellPath).toLowerCase();
@@ -212,4 +226,4 @@ function shellArgs(shellPath, cmd, extraArgs) {
   return [];
 }
 
-module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell };
+module.exports = { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgForShell, quoteArgvForShell, binaryBypassingShellAliases };

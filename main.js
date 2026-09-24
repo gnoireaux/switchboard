@@ -34,7 +34,7 @@ const { shouldStartFresh, shouldBlockArchivedSession } = require('./session-laun
 const { createTerminalActivity } = require('./terminal-activity');
 
 // Shell profiles → shell-profiles.js
-const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
+const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, binaryBypassingShellAliases } = require('./shell-profiles');
 const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
@@ -1526,7 +1526,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         : harness.buildLaunchArgs({ sessionId, isNew: startFresh, options: sessionOptions });
       if (attachAgentId) log.info(`[agents] session=${sessionId} attaching to background agent ${attachAgentId}`);
 
-      let claudeCmd = harness.binary;
+      let claudeCmd = attachAgentId ? binaryBypassingShellAliases(shell, harness.binary) : harness.binary;
       if (cliArgs.length) claudeCmd += ' ' + quoteArgvForShell(shell, cliArgs);
 
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --") — block newlines only
