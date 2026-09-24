@@ -50,6 +50,7 @@ const { spawn: spawnChildProcess } = require('child_process');
 const {
   AGENT_POLL_INTERVAL_MS,
   computeBlockedAgentNotifications,
+  liveBackgroundAgentIds,
   parseAgentsJson,
   nativeNotificationForAgent,
 } = require('./blocked-agent-notifications');
@@ -1514,11 +1515,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
         env: terminalEnv,
       });
     } else {
+      // A background agent still running cannot be resumed, only attached to.
+      const attachAgentId = isClaudeSession && !startFresh && !sessionOptions?.forkFrom
+        ? liveBackgroundAgents.get(sessionId)
+        : undefined;
       // Argv is built by the harness and quoted here, so a value can never be
       // spliced into the command line as shell syntax.
-      const cliArgs = harness.buildLaunchArgs({
-        sessionId, isNew: startFresh, options: sessionOptions,
-      });
+      const cliArgs = attachAgentId
+        ? ['attach', attachAgentId]
+        : harness.buildLaunchArgs({ sessionId, isNew: startFresh, options: sessionOptions });
+      if (attachAgentId) log.info(`[agents] session=${sessionId} attaching to background agent ${attachAgentId}`);
 
       let claudeCmd = harness.binary;
       if (cliArgs.length) claudeCmd += ' ' + quoteArgvForShell(shell, cliArgs);
@@ -1534,7 +1540,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
 
       // Start MCP server for this session so Claude CLI sends diffs/file opens to Switchboard
       // (skip if user disabled IDE emulation in global settings)
-      if (isClaudeSession && sessionOptions?.mcpEmulation !== false) {
+      // `claude attach` takes no flags, so an attached agent gets no IDE server.
+      if (isClaudeSession && !attachAgentId && sessionOptions?.mcpEmulation !== false) {
         try {
           mcpServer = await startMcpServer(sessionId, [projectPath], mainWindow, log);
           claudeCmd += ' --ide';
@@ -2197,6 +2204,9 @@ function startHarnessWatchers() {
 let blockedAgentTimer = null;
 let blockedAgentReasons = new Map();
 let blockedAgentWorkingSessionIds = new Set();
+// Session id → agent id of background agents alive at the last poll (see
+// liveBackgroundAgentIds); opening one attaches to it instead of resuming.
+let liveBackgroundAgents = new Map();
 let blockedAgentPollInFlight = false;
 let blockedAgentPollFailureLogged = false;
 // Last notification sent to the renderer per session, kept until the renderer
@@ -2271,6 +2281,7 @@ function pollBlockedAgents() {
       return;
     }
     blockedAgentPollFailureLogged = false;
+    liveBackgroundAgents = liveBackgroundAgentIds(agents);
 
     const { notifications, reasons, workingSessionIds } = computeBlockedAgentNotifications({
       agents,

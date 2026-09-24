@@ -5,6 +5,7 @@ const {
   AWAITING_REPLY,
   attentionReasonForAgent,
   computeBlockedAgentNotifications,
+  liveBackgroundAgentIds,
   parseAgentsJson,
   nativeNotificationForAgent,
 } = require('../blocked-agent-notifications');
@@ -232,4 +233,21 @@ test('native notification keeps paths outside home, and never has an empty body'
 
 test('native notification for an agent awaiting a reply says so', () => {
   assert.equal(nativeNotificationForAgent({ reason: AWAITING_REPLY }).title, 'Claude is waiting for your reply');
+});
+
+test('only background agents with a live process are attachable, keyed by session id', () => {
+  const parkedAlive = { ...backgroundBlocked, id: '194b0c77', pid: 47653, status: 'waiting', waitingFor: 'input needed' };
+  const ids = liveBackgroundAgentIds([
+    parkedAlive,
+    backgroundWorking,
+    backgroundBlocked, // no pid: its process is gone, so it resumes normally
+    interactivePermission, // interactive: has a pid but is not a background agent
+    { kind: 'background', pid: 1, sessionId: 'no-agent-id' },
+    null,
+  ]);
+  assert.deepEqual([...ids.entries()], [
+    [parkedAlive.sessionId, '194b0c77'],
+    [backgroundWorking.sessionId, 'e1e1e1e1'],
+  ]);
+  assert.equal(liveBackgroundAgentIds(undefined).size, 0);
 });

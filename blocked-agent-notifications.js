@@ -107,6 +107,21 @@ function computeBlockedAgentNotifications({ agents, hostedSessionIds, previousRe
   return { notifications, reasons, workingSessionIds };
 }
 
+// Background agents whose process is still alive, keyed by session id, valued by
+// the short agent id. `claude --resume` refuses such a session while it runs
+// ("is running as a background session … Run `claude attach`"), so opening it
+// from the sidebar must attach instead.
+function liveBackgroundAgentIds(agents) {
+  const ids = new Map();
+  for (const agent of Array.isArray(agents) ? agents : []) {
+    if (!agent || agent.kind !== 'background' || !agent.pid) continue;
+    const { sessionId, id } = agent;
+    if (typeof sessionId !== 'string' || !sessionId || typeof id !== 'string' || !id) continue;
+    ids.set(sessionId, id);
+  }
+  return ids;
+}
+
 // `claude agents --json` runs through a login shell so nvm/asdf-style PATH setup
 // applies; that shell may print its own banner, so recover the JSON array rather
 // than trusting the whole of stdout to be parseable.
@@ -133,5 +148,6 @@ module.exports = {
   notificationMessageForReason,
   nativeNotificationForAgent,
   computeBlockedAgentNotifications,
+  liveBackgroundAgentIds,
   parseAgentsJson,
 };
