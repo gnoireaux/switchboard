@@ -18,6 +18,11 @@ const AGENT_POLL_INTERVAL_MS = 10000;
 
 const WAITING_FOR_PERMISSION = 'permission prompt';
 const WAITING_FOR_INPUT = 'input needed';
+// A background agent whose turn ended cleanly reports `state: 'done'`. One whose
+// turn ended on a question in its reply, or on an error such as a spend limit,
+// reports `state: 'blocked'` with no `waitingFor` (observed 2026-09-24): it
+// needs the human, but through its reply, not a prompt still on screen.
+const AWAITING_REPLY = 'awaiting reply';
 
 // Reason strings are the stable identity of "why this session needs attention".
 // A change of reason (input needed → permission prompt) re-triggers a
@@ -27,6 +32,7 @@ function attentionReasonForAgent(agent) {
   const isBlocked = agent.state === 'blocked' || agent.status === 'waiting';
   if (!isBlocked) return null;
   if (typeof agent.waitingFor === 'string' && agent.waitingFor) return agent.waitingFor;
+  if (agent.state === 'blocked' && agent.status !== 'waiting') return AWAITING_REPLY;
   return 'blocked';
 }
 
@@ -36,6 +42,7 @@ function attentionReasonForAgent(agent) {
 function notificationMessageForReason(reason) {
   if (reason === WAITING_FOR_PERMISSION) return 'Claude needs your permission to continue';
   if (reason === WAITING_FOR_INPUT) return 'Claude Code needs your attention — input needed';
+  if (reason === AWAITING_REPLY) return 'Claude Code needs your attention — awaiting your reply';
   return 'Claude Code needs your attention';
 }
 
@@ -45,6 +52,7 @@ function notificationMessageForReason(reason) {
 function nativeNotificationForAgent({ reason, name, cwd, homeDir }) {
   const title = reason === WAITING_FOR_PERMISSION ? 'Claude needs your permission'
     : reason === WAITING_FOR_INPUT ? 'Claude needs your input'
+    : reason === AWAITING_REPLY ? 'Claude is waiting for your reply'
     : 'Claude session is blocked';
   let where = typeof cwd === 'string' && cwd ? cwd : null;
   if (where && homeDir && (where === homeDir || where.startsWith(homeDir + '/'))) {
@@ -60,21 +68,32 @@ function nativeNotificationForAgent({ reason, name, cwd, homeDir }) {
 //
 // Hosted sessions are tracked but never notified — their reason is remembered so
 // that closing their terminal in Switchboard doesn't fire a stale notification.
-function computeBlockedAgentNotifications({ agents, hostedSessionIds, previousReasons }) {
+//
+// A turn that ended awaiting a reply is announced only when this poller saw the
+// agent working the tick before. Such agents linger in the list for weeks, so
+// without that every app start would re-announce all of them; the price is that
+// a turn which ends while Switchboard is closed goes unannounced.
+function computeBlockedAgentNotifications({ agents, hostedSessionIds, previousReasons, previousWorkingSessionIds }) {
   const hosted = hostedSessionIds instanceof Set ? hostedSessionIds : new Set(hostedSessionIds || []);
   const previous = previousReasons instanceof Map ? previousReasons : new Map();
+  const previousWorking = previousWorkingSessionIds instanceof Set
+    ? previousWorkingSessionIds
+    : new Set(previousWorkingSessionIds || []);
   const reasons = new Map();
+  const workingSessionIds = new Set();
   const notifications = [];
 
   for (const agent of Array.isArray(agents) ? agents : []) {
     const sessionId = agent && agent.sessionId;
     if (typeof sessionId !== 'string' || !sessionId) continue;
+    if (agent.state === 'working') workingSessionIds.add(sessionId);
     const reason = attentionReasonForAgent(agent);
     if (!reason) continue;
 
     reasons.set(sessionId, reason);
     if (hosted.has(sessionId)) continue;
     if (previous.get(sessionId) === reason) continue;
+    if (reason === AWAITING_REPLY && !previousWorking.has(sessionId)) continue;
 
     notifications.push({
       sessionId,
@@ -85,7 +104,7 @@ function computeBlockedAgentNotifications({ agents, hostedSessionIds, previousRe
     });
   }
 
-  return { notifications, reasons };
+  return { notifications, reasons, workingSessionIds };
 }
 
 // `claude agents --json` runs through a login shell so nvm/asdf-style PATH setup
@@ -109,6 +128,7 @@ function parseAgentsJson(stdout) {
 
 module.exports = {
   AGENT_POLL_INTERVAL_MS,
+  AWAITING_REPLY,
   attentionReasonForAgent,
   notificationMessageForReason,
   nativeNotificationForAgent,

@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  AWAITING_REPLY,
   attentionReasonForAgent,
   computeBlockedAgentNotifications,
   parseAgentsJson,
@@ -54,16 +55,17 @@ const backgroundWorking = {
   status: 'busy',
 };
 
-function compute(agents, hosted = [], previous = new Map()) {
+function compute(agents, hosted = [], previous = new Map(), previousWorking = new Set()) {
   return computeBlockedAgentNotifications({
     agents,
     hostedSessionIds: hosted,
     previousReasons: previous,
+    previousWorkingSessionIds: previousWorking,
   });
 }
 
 test('attention reason recognises both the background `state` and the interactive `status` shapes', () => {
-  assert.equal(attentionReasonForAgent(backgroundBlocked), 'blocked');
+  assert.equal(attentionReasonForAgent(backgroundBlocked), AWAITING_REPLY);
   assert.equal(attentionReasonForAgent(interactivePermission), 'permission prompt');
   assert.equal(attentionReasonForAgent(interactiveInput), 'input needed');
   assert.equal(attentionReasonForAgent(interactiveIdle), null);
@@ -77,7 +79,10 @@ test('a background agent that is blocked while waiting reports the specific reas
 });
 
 test('waiting sessions produce one notification each, with the message the renderer classifies', () => {
-  const { notifications } = compute([interactivePermission, interactiveInput, interactiveIdle, backgroundBlocked]);
+  const { notifications } = compute(
+    [interactivePermission, interactiveInput, interactiveIdle, backgroundBlocked],
+    [], new Map(), new Set([backgroundBlocked.sessionId]),
+  );
 
   assert.deepEqual(notifications.map(n => n.sessionId), [
     interactivePermission.sessionId,
@@ -124,6 +129,46 @@ test('a session that moves from input needed to a permission prompt notifies aga
   const second = compute([interactivePermission], [], first.reasons);
   assert.equal(second.notifications.length, 1);
   assert.equal(second.notifications[0].reason, 'permission prompt');
+});
+
+test('a blocked background agent with no prompt on screen is awaiting a reply, whatever its status says', () => {
+  // Real shapes (2026-09-24): no pid and no status once the process is gone;
+  // `status: 'idle'` while it is still alive.
+  assert.equal(attentionReasonForAgent({ ...backgroundBlocked, pid: 21497, status: 'idle' }), AWAITING_REPLY);
+  // A turn that ended cleanly needs nobody.
+  assert.equal(attentionReasonForAgent({ ...backgroundBlocked, state: 'done', status: 'idle' }), null);
+  // A waiting status with no detail still means something is pending.
+  assert.equal(attentionReasonForAgent({ ...backgroundBlocked, status: 'waiting' }), 'blocked');
+});
+
+test('an agent first seen awaiting a reply is not announced — it may have stopped weeks ago', () => {
+  const { notifications, reasons } = compute([backgroundBlocked]);
+  assert.equal(notifications.length, 0);
+  // Remembered, so a later tick does not mistake it for a fresh stop either.
+  assert.equal(reasons.get(backgroundBlocked.sessionId), AWAITING_REPLY);
+});
+
+test('a turn ending on a reply is announced once when the previous tick saw the agent working', () => {
+  const workingTick = compute([backgroundWorking]);
+  assert.equal(workingTick.notifications.length, 0);
+  assert.ok(workingTick.workingSessionIds.has(backgroundWorking.sessionId));
+
+  const finished = { ...backgroundWorking, state: 'blocked', status: undefined };
+  const finishedTick = compute([finished], [], workingTick.reasons, workingTick.workingSessionIds);
+  assert.equal(finishedTick.notifications.length, 1);
+  assert.equal(finishedTick.notifications[0].reason, AWAITING_REPLY);
+  assert.match(finishedTick.notifications[0].message, /needs your attention — awaiting your reply/);
+  assert.equal(finishedTick.workingSessionIds.size, 0);
+
+  const laterTick = compute([finished], [], finishedTick.reasons, finishedTick.workingSessionIds);
+  assert.equal(laterTick.notifications.length, 0);
+});
+
+test('a permission prompt on a background agent is announced even on first sight', () => {
+  const parked = { ...backgroundBlocked, status: 'waiting', waitingFor: 'permission prompt' };
+  const { notifications } = compute([parked]);
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0].reason, 'permission prompt');
 });
 
 test('sessions Switchboard hosts are not notified — their PTY already raises OSC 9', () => {
@@ -183,4 +228,8 @@ test('native notification keeps paths outside home, and never has an empty body'
     reason: 'blocked', name: '', cwd: '/Users/meow/x', homeDir: '/Users/me',
   }), { title: 'Claude session is blocked', body: '/Users/meow/x' });
   assert.equal(nativeNotificationForAgent({ reason: 'blocked' }).body, 'Session outside the sidebar');
+});
+
+test('native notification for an agent awaiting a reply says so', () => {
+  assert.equal(nativeNotificationForAgent({ reason: AWAITING_REPLY }).title, 'Claude is waiting for your reply');
 });

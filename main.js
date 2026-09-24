@@ -2196,6 +2196,7 @@ function startHarnessWatchers() {
 // and raise the same 'terminal-notification' for them.
 let blockedAgentTimer = null;
 let blockedAgentReasons = new Map();
+let blockedAgentWorkingSessionIds = new Set();
 let blockedAgentPollInFlight = false;
 let blockedAgentPollFailureLogged = false;
 // Last notification sent to the renderer per session, kept until the renderer
@@ -2271,12 +2272,14 @@ function pollBlockedAgents() {
     }
     blockedAgentPollFailureLogged = false;
 
-    const { notifications, reasons } = computeBlockedAgentNotifications({
+    const { notifications, reasons, workingSessionIds } = computeBlockedAgentNotifications({
       agents,
       hostedSessionIds: hostedSessionIds(),
       previousReasons: blockedAgentReasons,
+      previousWorkingSessionIds: blockedAgentWorkingSessionIds,
     });
     blockedAgentReasons = reasons;
+    blockedAgentWorkingSessionIds = workingSessionIds;
 
     for (const notification of notifications) {
       log.info(`[agents] session=${notification.sessionId} reason="${notification.reason}" cwd=${notification.cwd || '?'}`);
