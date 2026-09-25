@@ -1488,15 +1488,21 @@ window.api.onProjectsChanged((reason) => {
 });
 
 // A session started from outside the app (the launch socket). The main process
-// has already checked that the project is one Switchboard tracks.
+// has already checked that the folder is one Switchboard tracks, and says which
+// project and track the successor joins when its spawner was filed in one.
 window.api.onLaunchSessionRequest(async (request) => {
   const options = {};
   if (request.initialPrompt) {
     options.initialPrompt = request.initialPrompt;
     options.initialPromptAutoSubmit = !!request.initialPromptAutoSubmit;
   }
-  const defaults = await resolveDefaultSessionOptions({ projectPath: request.projectPath });
-  await launchNewSession({ projectPath: request.projectPath }, { ...defaults, ...options });
+  const target = { projectPath: request.projectPath };
+  if (request.projectId) {
+    target.projectId = request.projectId;
+    target.trackId = request.trackId || null;
+  }
+  const defaults = await resolveDefaultSessionOptions(target);
+  await launchNewSession(target, { ...defaults, ...options });
 });
 
 // Status bar

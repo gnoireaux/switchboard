@@ -2353,25 +2353,62 @@ ipcMain.on('sidebar-ready', () => {
 // --- Launch socket: a running session hands its successor to Switchboard ---
 let launchSocket = null;
 
-// An external caller may only launch into a project Switchboard already tracks.
+// The spawner's filing, by the session id it sent. session_meta is keyed by
+// the real id; a live session still known by its temporary id (a harness that
+// learns its id late) is found through activeSessions.
+function launchSourceAssignment(sessionId) {
+  const meta = getMeta(sessionId);
+  if (meta?.projectId) return { projectId: meta.projectId, trackId: meta.trackId || null };
+  for (const [id, session] of activeSessions) {
+    if (id !== sessionId && session.realSessionId !== sessionId) continue;
+    if (session.projectId) return { projectId: session.projectId, trackId: session.trackId || null };
+    const tempMeta = getMeta(id);
+    if (tempMeta?.projectId) return { projectId: tempMeta.projectId, trackId: tempMeta.trackId || null };
+  }
+  return null;
+}
+
+// An external caller may only launch into a folder Switchboard already tracks,
+// or, when the spawner is filed in a project, into that project's folders.
 // Auto-adding a project on an unauthenticated-by-path request is its own trust
-// question, so an unknown cwd is refused and the human adds the project.
+// question, so any other cwd is refused and the human adds the project.
+// A successor of a project session joins its project and track, the way a fork
+// does, so it gets the project's extra directories and the track's
+// "Resume latest" moves on to it.
 function handleExternalLaunchRequest(request) {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Switchboard has no window open' };
-  const known = buildProjectsFromCache(true).some(p => p.projectPath === request.cwd);
+  let placement = null;
+  if (request.inheritFrom) {
+    try {
+      placement = projects.inheritedLaunchPlacement(launchSourceAssignment(request.inheritFrom), request.cwd);
+    } catch (err) {
+      log.error(`[launch-socket] could not look up ${request.inheritFrom}: ${err?.message || String(err)}`);
+    }
+    if (placement) {
+      log.info(`[launch-socket] inheriting project=${placement.projectId} track=${placement.trackId || '-'} from ${request.inheritFrom} (cwd within project: ${placement.cwdWithinProject})`);
+    } else {
+      log.info(`[launch-socket] ${request.inheritFrom} is not filed in a project; launching unfiled`);
+    }
+  }
+  const known = buildProjectsFromCache(true).some(p => p.projectPath === request.cwd)
+    || !!placement?.cwdWithinProject;
   if (!known) {
     log.warn(`[launch-socket] refused unknown project ${request.cwd}`);
     return { ok: false, error: `not a Switchboard project: ${request.cwd}` };
   }
   mainWindow.webContents.send('launch-session-request', {
     projectPath: request.cwd,
+    projectId: placement?.projectId || null,
+    trackId: placement?.trackId || null,
     initialPrompt: request.prompt,
     initialPromptAutoSubmit: request.autoSubmit,
   });
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   log.info(`[launch-socket] launching in ${request.cwd} (${request.prompt.length} chars, autoSubmit=${request.autoSubmit})`);
-  return { ok: true };
+  return placement
+    ? { ok: true, projectId: placement.projectId, trackId: placement.trackId }
+    : { ok: true };
 }
 
 async function startLaunchSocket() {

@@ -85,7 +85,7 @@ test('cwd must be present and absolute', () => {
 
 test('a valid request keeps the prompt and defaults autoSubmit to off', () => {
   const ok = parseLaunchRequest('{"token":"s","cwd":"/tmp/./proj","prompt":"continue"}', 's');
-  assert.deepEqual(ok, { ok: true, request: { cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false } });
+  assert.deepEqual(ok, { ok: true, request: { cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false, inheritFrom: null } });
 });
 
 test('autoSubmit is honoured only as a real boolean true', () => {
@@ -100,6 +100,29 @@ test('autoSubmit is honoured only as a real boolean true', () => {
 test('a missing prompt is empty, not undefined', () => {
   assert.equal(parseLaunchRequest('{"token":"s","cwd":"/tmp"}', 's').request.prompt, '');
   assert.equal(parseLaunchRequest('{"token":"s","cwd":"/tmp","prompt":42}', 's').request.prompt, '');
+});
+
+test('inheritFrom passes through as a session id, and anything else is refused', () => {
+  const sid = '1e4fc13c-c629-429d-b21c-eec2d71b907c';
+  assert.equal(parseLaunchRequest(`{"token":"s","cwd":"/tmp","inheritFrom":"${sid}"}`, 's').request.inheritFrom, sid);
+  assert.equal(parseLaunchRequest('{"token":"s","cwd":"/tmp","inheritFrom":null}', 's').request.inheritFrom, null);
+  for (const bad of ['42', '""', '"a b"', '"../x"', '{}', `"${'a'.repeat(129)}"`]) {
+    assert.deepEqual(
+      parseLaunchRequest(`{"token":"s","cwd":"/tmp","inheritFrom":${bad}}`, 's'),
+      { ok: false, error: 'inheritFrom must be a session id' },
+      `${bad} must be refused`,
+    );
+  }
+});
+
+test('the client sends the caller\u2019s session id unless told otherwise', () => {
+  const { parseArgs } = require('../scripts/launch-session');
+  const env = { CLAUDE_CODE_SESSION_ID: 'caller-sid' };
+  assert.equal(parseArgs(['--cwd', '/p'], env).inheritFrom, 'caller-sid');
+  assert.equal(parseArgs(['--cwd', '/p'], {}).inheritFrom, null, 'outside Claude Code there is nothing to inherit');
+  assert.equal(parseArgs(['--inherit-from', 'other-sid'], env).inheritFrom, 'other-sid');
+  assert.equal(parseArgs(['--no-inherit'], env).inheritFrom, null);
+  assert.equal(parseArgs(['--no-inherit', '--inherit-from', 'x'], env).inheritFrom, 'x', 'the last flag wins');
 });
 
 test('a socket file left by a crash is removed; a live one is left alone', async () => {
@@ -128,7 +151,7 @@ test('the server hands a valid request to onLaunch and reports its result', asyn
 
   const reply = await request(socketPath, { token: 'secret', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true });
   assert.deepEqual(reply, { ok: true, sessionId: 'abc' });
-  assert.deepEqual(seen, [{ cwd: '/tmp/proj', prompt: 'go', autoSubmit: true }]);
+  assert.deepEqual(seen, [{ cwd: '/tmp/proj', prompt: 'go', autoSubmit: true, inheritFrom: null }]);
   assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
 
   await handle.close();

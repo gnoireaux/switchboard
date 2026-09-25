@@ -21,6 +21,10 @@ const TOKEN_FILE = 'launch-token';
 // A request bigger than this is junk or an attack, not a prompt.
 const MAX_REQUEST_BYTES = 64 * 1024;
 
+// Claude and Codex session ids are UUIDs; this is looser so a future id
+// format still passes, and strict enough to keep junk out of logs.
+const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
 // The socket lives in the data dir, not the home dir: an instance started with
 // SWITCHBOARD_DATA_DIR is a separate app with its own sessions, and a caller
 // exporting the same variable reaches that instance rather than the installed
@@ -74,9 +78,19 @@ function parseLaunchRequest(raw, expectedToken) {
   if (typeof cwd !== 'string' || !cwd.trim()) return { ok: false, error: 'cwd is required' };
   if (!path.isAbsolute(cwd)) return { ok: false, error: 'cwd must be an absolute path' };
   const prompt = typeof parsed.prompt === 'string' ? parsed.prompt : '';
+  // The spawner's session id: the successor joins the spawner's project and
+  // track. Optional; when present it must look like an id, since it ends up in
+  // a database lookup and a log line.
+  let inheritFrom = null;
+  if (parsed.inheritFrom !== undefined && parsed.inheritFrom !== null) {
+    if (typeof parsed.inheritFrom !== 'string' || !SESSION_ID_PATTERN.test(parsed.inheritFrom)) {
+      return { ok: false, error: 'inheritFrom must be a session id' };
+    }
+    inheritFrom = parsed.inheritFrom;
+  }
   return {
     ok: true,
-    request: { cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true },
+    request: { cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true, inheritFrom },
   };
 }
 

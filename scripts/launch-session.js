@@ -8,18 +8,28 @@
 //
 // --send presses Enter for the successor; without it the prompt waits in the
 // input box. Reads the prompt from stdin when --prompt is omitted.
+//
+// The successor joins the caller's Switchboard project and track: the caller's
+// session id (CLAUDE_CODE_SESSION_ID, set by Claude Code in its tool shells) is
+// sent as inheritFrom. --inherit-from <id> names another session; --no-inherit
+// sends none, and the successor is filed by its folder alone.
 
 const net = require('net');
 const fs = require('fs');
 const { defaultLaunchPaths } = require('../launch-socket-server');
 
-function parseArgs(argv) {
-  const args = { cwd: process.cwd(), prompt: null, autoSubmit: false };
+function parseArgs(argv, env = process.env) {
+  const args = {
+    cwd: process.cwd(), prompt: null, autoSubmit: false,
+    inheritFrom: env.CLAUDE_CODE_SESSION_ID || null,
+  };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--cwd') args.cwd = argv[++i];
     else if (arg === '--prompt') args.prompt = argv[++i];
     else if (arg === '--send') args.autoSubmit = true;
+    else if (arg === '--inherit-from') args.inheritFrom = argv[++i] || null;
+    else if (arg === '--no-inherit') args.inheritFrom = null;
     else {
       process.stderr.write(`unknown argument: ${arg}\n`);
       process.exit(2);
@@ -57,7 +67,9 @@ async function main() {
     process.exit(1);
   });
   socket.on('connect', () => {
-    socket.write(`${JSON.stringify({ token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit })}\n`);
+    const payload = { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
+    if (args.inheritFrom) payload.inheritFrom = args.inheritFrom;
+    socket.write(`${JSON.stringify(payload)}\n`);
   });
 
   let reply = '';
@@ -67,7 +79,8 @@ async function main() {
     let parsed;
     try { parsed = JSON.parse(reply); } catch { parsed = { ok: false, error: `unreadable reply: ${reply}` }; }
     if (parsed.ok) {
-      process.stdout.write(`launched in ${args.cwd}\n`);
+      const filed = parsed.projectId ? ` (project ${parsed.projectId}${parsed.trackId ? `, track ${parsed.trackId}` : ''})` : '';
+      process.stdout.write(`launched in ${args.cwd}${filed}\n`);
       return;
     }
     process.stderr.write(`launch refused: ${parsed.error}\n`);
@@ -75,4 +88,6 @@ async function main() {
   });
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = { parseArgs };

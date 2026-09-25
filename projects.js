@@ -1437,6 +1437,34 @@ function recordLaunchAssignment(sessionId, options) {
   return { projectId, trackId };
 }
 
+/**
+ * Where a session started through the launch socket belongs when its spawner
+ * (source = the spawner's { projectId, trackId } filing) is in a project: the
+ * same project, and the same track while that track still exists in it.
+ * cwdWithinProject says whether cwd is the project folder, an attached folder
+ * or inside one, which makes it a place this project may launch in even when
+ * the Sessions tab does not list it. Returns null for an unfiled spawner or a
+ * project that is gone: the launch is then exactly an unfiled one.
+ */
+function inheritedLaunchPlacement(source, cwd) {
+  const projectId = source?.projectId;
+  if (!projectId) return null;
+  const project = db.getProject(projectId);
+  if (!project) return null;
+  let trackId = source.trackId || null;
+  if (trackId) {
+    const track = db.getTrack(trackId);
+    if (!track || track.projectId !== projectId) trackId = null;
+  }
+  let cwdWithinProject = false;
+  if (typeof cwd === 'string' && path.isAbsolute(cwd)) {
+    const real = realOrResolved(cwd);
+    const allowed = [project.root, ...db.listProjectFolders(projectId).map(f => f.path)];
+    cwdWithinProject = isDirectory(cwd) && allowed.some(p => isInside(real, realOrResolved(p)));
+  }
+  return { projectId, trackId, cwdWithinProject };
+}
+
 // --- The tree ---
 
 /** The project whose root contains cwd, or null. Explicit filing beats this. */
@@ -1800,6 +1828,6 @@ module.exports = {
   createTrack, updateTrack, deleteTrack,
   listSchedules, createSchedule, updateSchedule, deleteSchedule, resolveScheduleLaunch, resolveScheduleContext,
   dueSchedules, missedSchedules, recordScheduleRun, importLegacySchedules, schedulePausedReason,
-  assignSession, recordLaunchAssignment,
+  assignSession, recordLaunchAssignment, inheritedLaunchPlacement,
   projectForCwd, buildProjectTree,
 };
