@@ -868,16 +868,27 @@ function bindProjectList() {
   });
 }
 
+/**
+ * Take the focused session off screen, so it stops counting as the one you are
+ * looking at: its notices badge its row again instead of being swallowed.
+ */
+function dropActiveSession() {
+  setActiveSession(null);
+  document.querySelectorAll('.terminal-container.visible').forEach(el => el.classList.remove('visible'));
+  document.querySelectorAll('.session-item.active, .pane-session.here').forEach(el => el.classList.remove('active', 'here'));
+  if (typeof terminalHeader !== 'undefined') terminalHeader.style.display = 'none';
+}
+
+function activeSessionProjectId() {
+  const active = activeSessionId ? sessionMap.get(activeSessionId) : null;
+  return active ? projectForSession(active)?.project?.id ?? null : undefined;
+}
+
 function selectProject(id, { tab } = {}) {
   // Moving to another project drops the session that was open: it belongs to
   // the project you left, so it must not stay focused in the one you opened.
-  const active = activeSessionId ? sessionMap.get(activeSessionId) : null;
-  if (active && projectForSession(active)?.project?.id !== id) {
-    setActiveSession(null);
-    document.querySelectorAll('.terminal-container.visible').forEach(el => el.classList.remove('visible'));
-    document.querySelectorAll('.session-item.active, .pane-session.here').forEach(el => el.classList.remove('active', 'here'));
-    if (typeof terminalHeader !== 'undefined') terminalHeader.style.display = 'none';
-  }
+  const activeProjectId = activeSessionProjectId();
+  if (activeProjectId !== undefined && activeProjectId !== id) dropActiveSession();
   projectsUi.selectedProjectId = id;
   // Opening a project that woke ends the snooze for good: the "woke" note
   // goes and the columns clear. Until then the note marks what came back.
@@ -3527,6 +3538,9 @@ async function snoozeProject(project, snoozedUntil) {
   // Out of sight means the page too: snoozing the open project closes it.
   // The shelf itself is left as the user set it; it starts collapsed.
   if (snoozedUntil && projectsUi.selectedProjectId === project.id) {
+    // Its session goes with the page. Left focused while hidden, it would
+    // never show that it needs you, and so never wake the project.
+    if (activeSessionProjectId() === project.id) dropActiveSession();
     projectsUi.selectedProjectId = null;
     saveProjectsUi();
     leaveProjectViews();
