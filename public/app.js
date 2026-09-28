@@ -117,6 +117,15 @@ window._applyTerminalTheme = (themeName) => {
     entry.element.style.backgroundColor = TERMINAL_THEME.background;
   }
 };
+window._applySidebarZoom = (zoom) => {
+  const sidebar = document.getElementById('sidebar');
+  if (!sidebar) return;
+  const z = zoom || 1;
+  sidebar.style.zoom = z;
+  // zoom scales the box after layout, so height:100vh would render as (z*100)vh and
+  // leave a gap below. Counter-scale the height so the sidebar still fills the viewport.
+  sidebar.style.height = z === 1 ? '' : (100 / z) + 'vh';
+};
 let searchMatchIds = null; // null = no search active; Set<string> = matched session IDs
 let searchMatchProjectPaths = null; // Set<string> of project paths matched by name
 
@@ -1406,6 +1415,9 @@ setTimeout(() => {
     if (global.terminalTheme && TERMINAL_THEMES[global.terminalTheme]) {
       currentThemeName = global.terminalTheme;
       TERMINAL_THEME = getTerminalTheme();
+    }
+    if (global.sidebarZoom) {
+      window._applySidebarZoom(global.sidebarZoom);
     }
   }
 })();

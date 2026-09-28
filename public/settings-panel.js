@@ -97,6 +97,7 @@
     const visCountValue = fieldValue('visibleSessionCount', 10);
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
+    const sidebarZoomValue = fieldValue('sidebarZoom', 1);
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
     // Global-only: where new projects get their folder (projects.js). Empty
     // means the default, ~/Switchboard.
@@ -265,6 +266,16 @@
                 `<option value="${key}" ${themeValue === key ? 'selected' : ''}>${escapeHtml(t.label)}</option>`
               ).join('')}
             </select>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Sidebar Zoom</span>
+            <div class="settings-description">Scale the left panel (fonts and spacing). 1 = normal, below 1 shrinks. Applies immediately.</div>
+          </div>
+          <div class="settings-field-control">
+            <input type="number" class="settings-input settings-input-compact" id="sv-sidebar-zoom" min="0.5" max="1.5" step="0.05" value="${sidebarZoomValue}">
           </div>
         </div>
 
@@ -453,6 +464,7 @@
         settings.visibleSessionCount = parseInt(settingsViewerBody.querySelector('#sv-visible-count').value) || 10;
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
+        settings.sidebarZoom = parseFloat(settingsViewerBody.querySelector('#sv-sidebar-zoom').value) || 1;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
@@ -476,6 +488,9 @@
         }
         if (settings.terminalTheme && typeof window._applyTerminalTheme === 'function') {
           window._applyTerminalTheme(settings.terminalTheme);
+        }
+        if (typeof window._applySidebarZoom === 'function') {
+          window._applySidebarZoom(settings.sidebarZoom);
         }
         if (typeof refreshSidebar === 'function') refreshSidebar();
       }

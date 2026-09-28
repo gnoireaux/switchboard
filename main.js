@@ -1029,6 +1029,7 @@ const SETTING_DEFAULTS = {
   effort: '',
   visibleSessionCount: 5,
   sidebarWidth: 340,
+  sidebarZoom: 1,
   terminalTheme: 'switchboard',
   mcpEmulation: false,
   shellProfile: 'auto',
