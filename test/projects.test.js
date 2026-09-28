@@ -340,6 +340,54 @@ test('recordLaunchAssignment ignores unknown projects and mismatched tracks', as
   } finally { t.cleanup(); }
 });
 
+test('a launch-socket successor inherits its spawner\u2019s project and track', async () => {
+  const t = setup();
+  const repo = tmpDir('switchboard-repo-');
+  const outside = tmpDir('switchboard-outside-');
+  try {
+    const { project } = await projects.createProject({ name: 'Baton', folders: [{ path: repo }] });
+    t.db.rows.tracks.push({ id: 'trk', projectId: project.id, name: 'Chain', created: 'x' });
+    const nested = path.join(repo, 'sub');
+    fs.mkdirSync(nested);
+
+    for (const cwd of [project.root, repo, nested]) {
+      assert.deepEqual(
+        projects.inheritedLaunchPlacement({ projectId: project.id, trackId: 'trk' }, cwd),
+        { projectId: project.id, trackId: 'trk', cwdWithinProject: true },
+        `${cwd} is inside the project`,
+      );
+    }
+    assert.deepEqual(
+      projects.inheritedLaunchPlacement({ projectId: project.id, trackId: 'trk' }, outside),
+      { projectId: project.id, trackId: 'trk', cwdWithinProject: false },
+      'a folder outside the project is still filed there, but grants no launch right',
+    );
+    assert.equal(
+      projects.inheritedLaunchPlacement({ projectId: project.id }, path.join(repo, 'missing')).cwdWithinProject,
+      false, 'a folder that does not exist is not a place to launch in',
+    );
+  } finally { t.cleanup(); rm(repo); rm(outside); }
+});
+
+test('an unfiled or orphaned spawner gives no placement; a stale track is dropped', async () => {
+  const t = setup();
+  try {
+    const { project } = await projects.createProject({ name: 'Baton' });
+    t.db.rows.tracks.push({ id: 'foreign', projectId: 'elsewhere', name: 'T', created: 'x' });
+    assert.equal(projects.inheritedLaunchPlacement(null, project.root), null);
+    assert.equal(projects.inheritedLaunchPlacement({ projectId: null, trackId: null }, project.root), null);
+    assert.equal(projects.inheritedLaunchPlacement({ projectId: 'deleted' }, project.root), null);
+    assert.deepEqual(
+      projects.inheritedLaunchPlacement({ projectId: project.id, trackId: 'foreign' }, project.root),
+      { projectId: project.id, trackId: null, cwdWithinProject: true },
+    );
+    assert.deepEqual(
+      projects.inheritedLaunchPlacement({ projectId: project.id, trackId: 'gone' }, project.root),
+      { projectId: project.id, trackId: null, cwdWithinProject: true },
+    );
+  } finally { t.cleanup(); }
+});
+
 test('createTrack validates the project, name, folder and CLI', async () => {
   const t = setup();
   try {

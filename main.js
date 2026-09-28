@@ -38,6 +38,7 @@ const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslS
 const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
+const sessionConfig = require('./public/session-config');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
 const { manageProjectEntry } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
@@ -1374,6 +1375,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   if (!fs.existsSync(projectPath)) {
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
+  // The options as the caller asked for them, before the project's folders are
+  // merged in: what a successor started through the launch socket inherits.
+  const requestedOptions = sessionOptions || null;
 
   // A session that never wrote a transcript cannot be resumed — the CLI has no
   // record of the id, and asking it to resume one produces an error the user
@@ -1610,6 +1614,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       spawnedAt: Date.now(),
     } : null,
     mcpServer, _openedAt: Date.now(),
+    launchOptions: isPlainTerminal ? null : sessionConfig.inheritableOptions(runtimeId, requestedOptions),
     _pendingInitialPrompt: isPlainTerminal ? null : buildInitialPromptWrites(sessionOptions?.initialPrompt, {
       autoSubmit: !!sessionOptions?.initialPromptAutoSubmit,
     }),
@@ -1651,9 +1656,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // Type the initial prompt once the CLI is up. It is submitted only when the
   // launch request asked for it (trusted origin); otherwise the human reads it
   // and presses Enter. OSC 0 reporting idle is the signal that the input box
-  // exists; the timer covers a CLI that never reports one.
+  // exists; the timer covers a CLI that never reports one. A CLI still asking
+  // a startup question (folder trust) at the timeout keeps the prompt until
+  // the human has answered and the CLI reports idle.
   if (session._pendingInitialPrompt) {
     session._initialPromptTimer = setTimeout(() => {
+      session._initialPromptTimer = null;
+      if (harness?.showsStartupQuestion?.(session.outputBuffer.join(''))) {
+        log.info(`[initial-prompt] session=${sessionId} held: the CLI is asking a startup question; delivering once it is idle`);
+        return;
+      }
       deliverPendingInitialPrompt(session, sessionId, 'timeout');
     }, INITIAL_PROMPT_FALLBACK_MS);
   }
@@ -2353,25 +2365,74 @@ ipcMain.on('sidebar-ready', () => {
 // --- Launch socket: a running session hands its successor to Switchboard ---
 let launchSocket = null;
 
-// An external caller may only launch into a project Switchboard already tracks.
+// The spawner's filing, by the session id it sent. session_meta is keyed by
+// the real id; a live session still known by its temporary id (a harness that
+// learns its id late) is found through activeSessions.
+function liveLaunchSource(sessionId) {
+  for (const [id, session] of activeSessions) {
+    if (id === sessionId || session.realSessionId === sessionId) return { id, session };
+  }
+  return null;
+}
+
+function launchSourceAssignment(sessionId) {
+  const meta = getMeta(sessionId);
+  if (meta?.projectId) return { projectId: meta.projectId, trackId: meta.trackId || null };
+  const live = liveLaunchSource(sessionId);
+  if (live?.session.projectId) return { projectId: live.session.projectId, trackId: live.session.trackId || null };
+  const tempMeta = live ? getMeta(live.id) : null;
+  if (tempMeta?.projectId) return { projectId: tempMeta.projectId, trackId: tempMeta.trackId || null };
+  return null;
+}
+
+// An external caller may only launch into a folder Switchboard already tracks,
+// or, when the spawner is filed in a project, into that project's folders.
 // Auto-adding a project on an unauthenticated-by-path request is its own trust
-// question, so an unknown cwd is refused and the human adds the project.
+// question, so any other cwd is refused and the human adds the project.
+// A successor of a project session joins its project and track, the way a fork
+// does, so it gets the project's extra directories and the track's
+// "Resume latest" moves on to it.
 function handleExternalLaunchRequest(request) {
   if (!mainWindow || mainWindow.isDestroyed()) return { ok: false, error: 'Switchboard has no window open' };
-  const known = buildProjectsFromCache(true).some(p => p.projectPath === request.cwd);
+  let placement = null;
+  if (request.inheritFrom) {
+    try {
+      placement = projects.inheritedLaunchPlacement(launchSourceAssignment(request.inheritFrom), request.cwd);
+    } catch (err) {
+      log.error(`[launch-socket] could not look up ${request.inheritFrom}: ${err?.message || String(err)}`);
+    }
+    if (placement) {
+      log.info(`[launch-socket] inheriting project=${placement.projectId} track=${placement.trackId || '-'} from ${request.inheritFrom} (cwd within project: ${placement.cwdWithinProject})`);
+    } else {
+      log.info(`[launch-socket] ${request.inheritFrom} is not filed in a project; launching unfiled`);
+    }
+  }
+  const known = buildProjectsFromCache(true).some(p => p.projectPath === request.cwd)
+    || !!placement?.cwdWithinProject;
   if (!known) {
     log.warn(`[launch-socket] refused unknown project ${request.cwd}`);
     return { ok: false, error: `not a Switchboard project: ${request.cwd}` };
   }
+  // A live spawner also hands on the options it was started with (model,
+  // effort, permission mode, CLI), so the successor runs the way it did.
+  const source = request.inheritFrom ? liveLaunchSource(request.inheritFrom) : null;
+  const inheritedOptions = source?.session.launchOptions || null;
+  if (inheritedOptions) log.info(`[launch-socket] inheriting options ${Object.keys(inheritedOptions).join(',')} from ${request.inheritFrom}`);
   mainWindow.webContents.send('launch-session-request', {
     projectPath: request.cwd,
+    projectId: placement?.projectId || null,
+    trackId: placement?.trackId || null,
+    handoffFrom: source ? request.inheritFrom : null,
+    inheritedOptions,
     initialPrompt: request.prompt,
     initialPromptAutoSubmit: request.autoSubmit,
   });
   if (mainWindow.isMinimized()) mainWindow.restore();
   mainWindow.show();
   log.info(`[launch-socket] launching in ${request.cwd} (${request.prompt.length} chars, autoSubmit=${request.autoSubmit})`);
-  return { ok: true };
+  return placement
+    ? { ok: true, projectId: placement.projectId, trackId: placement.trackId }
+    : { ok: true };
 }
 
 async function startLaunchSocket() {

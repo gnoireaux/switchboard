@@ -184,8 +184,25 @@ function sessionEventTime(session) {
   const known = sessionEventTimes.get(id) || 0;
   const t = new Date(session.modified).getTime();
   const modified = Number.isFinite(t) ? t : 0;
-  if (known && sessionBusyState.get(id) === true) return known;
-  return Math.max(known, modified);
+  const time = known && sessionBusyState.get(id) === true ? known : Math.max(known, modified);
+  const handoff = sessionHandoffTimes.get(id);
+  return handoff ? Math.min(time, handoff) : time;
+}
+
+// A session that started its successor through the launch socket. Its own
+// turn ends, and its transcript is written, after the handoff; without a cap
+// it would stay its track's "Resume latest" until the successor's first turn
+// is over. The cap holds until someone types into the spawner. Not persisted.
+const sessionHandoffTimes = new Map(); // spawner sessionId → ms of the handoff
+
+function recordSessionHandoff(sessionId) {
+  if (!sessionId) return;
+  sessionHandoffTimes.set(sessionId, Date.now());
+}
+
+function clearSessionHandoff(sessionId) {
+  if (!sessionHandoffTimes.delete(sessionId)) return;
+  if (typeof refreshProjectViews === 'function') refreshProjectViews({ reason: 'sessions' });
 }
 
 function saveSessionNotices() {
@@ -1488,15 +1505,23 @@ window.api.onProjectsChanged((reason) => {
 });
 
 // A session started from outside the app (the launch socket). The main process
-// has already checked that the project is one Switchboard tracks.
+// has already checked that the folder is one Switchboard tracks, and says which
+// project and track the successor joins when its spawner was filed in one, and
+// which options it inherits when its spawner is live.
 window.api.onLaunchSessionRequest(async (request) => {
   const options = {};
   if (request.initialPrompt) {
     options.initialPrompt = request.initialPrompt;
     options.initialPromptAutoSubmit = !!request.initialPromptAutoSubmit;
   }
-  const defaults = await resolveDefaultSessionOptions({ projectPath: request.projectPath });
-  await launchNewSession({ projectPath: request.projectPath }, { ...defaults, ...options });
+  const target = { projectPath: request.projectPath };
+  if (request.projectId) {
+    target.projectId = request.projectId;
+    target.trackId = request.trackId || null;
+  }
+  recordSessionHandoff(request.handoffFrom);
+  const defaults = await resolveDefaultSessionOptions(target);
+  await launchNewSession(target, { ...defaults, ...(request.inheritedOptions || {}), ...options });
 });
 
 // Status bar

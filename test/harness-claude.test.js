@@ -357,3 +357,12 @@ test('initialPrompt never reaches the command line — the PTY types it', () => 
   const forked = H.buildLaunchArgs({ sessionId: 'new', isNew: true, options: { forkFrom: 'src', initialPrompt: 'x' } });
   assert.ok(!forked.includes('x'), 'a fork carries its parent prompt');
 });
+
+test('the folder-trust question is spotted however the TUI spaces it', () => {
+  const question = '\x1b]0;\x07 Quick safety check: Is this a project you created or one you trust?\r\n' +
+    ' \x1b[36m❯\x1b[39m No, exit\r\n   Yes,\x1b[1CI\x1b[1Ctrust\x1b[1Cthis\x1b[1Cfolder\r\n';
+  assert.equal(claude.showsStartupQuestion(question), true);
+  assert.equal(claude.showsStartupQuestion('Yes, I trust\r\n this folder'), true, 'wrapped across lines');
+  assert.equal(claude.showsStartupQuestion('\x1b]0;✳ Claude Code\x07❯ Try "edit main.js to..."'), false);
+  assert.equal(claude.showsStartupQuestion(''), false);
+});

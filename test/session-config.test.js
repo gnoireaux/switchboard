@@ -129,3 +129,19 @@ test('additional Claude instructions preserve multiline text through settings an
   assert.throws(() => SessionConfig.normalizeOverrides('claude', { appendSystemPrompt: 'bad\x00prompt' }), /unsafe characters/);
   assert.throws(() => SessionConfig.normalizeOverrides('codex', { allowedTools: 'Read' }), /Unsupported/);
 });
+
+test('a successor inherits its spawner’s CLI settings, never its one-shot launch flags', () => {
+  const spawner = {
+    runtime: 'claude', model: 'opus[1m]', effort: 'high', permissionMode: 'auto', addDirs: '/extra',
+    worktree: true, worktreeName: 'wt', codexModel: 'gpt',
+    initialPrompt: 'go', initialPromptAutoSubmit: true, forkFrom: 'parent', resumeExisting: true, planItem: 'x',
+    projectId: 'p', trackId: 't',
+  };
+  assert.deepEqual(SessionConfig.inheritableOptions('claude', spawner),
+    { runtime: 'claude', model: 'opus[1m]', effort: 'high', permissionMode: 'auto', addDirs: '/extra' });
+  assert.deepEqual(SessionConfig.inheritableOptions('codex', { codexModel: 'gpt', model: 'opus' }),
+    { runtime: 'codex', codexModel: 'gpt' }, 'only the spawner’s own CLI fields pass');
+  assert.deepEqual(SessionConfig.inheritableOptions('claude', null), { runtime: 'claude' },
+    'a session started with no options still hands on its CLI');
+  assert.equal(SessionConfig.inheritableOptions(null, spawner), null, 'a plain terminal hands on nothing');
+});
