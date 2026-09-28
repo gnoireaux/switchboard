@@ -9,6 +9,7 @@ const log = require('electron-log');
 const { startMcpServer, shutdownMcpServer, shutdownAll: shutdownAllMcp, resolvePendingDiff, rekeyMcpServer, cleanStaleLockFiles } = require('./mcp-bridge');
 const { fetchAndTransformUsage } = require('./claude-auth');
 const { runStatsCommand, refreshStatsCache } = require('./stats-refresh');
+const { createQuitHoldGuard } = require('./quit-hold-guard');
 const { readHead } = require('./jsonl-scan');
 const codexAuth = require('./codex-auth');
 
@@ -102,6 +103,19 @@ const activeSessions = new Map();
 let mainWindow = null;
 let appIsQuitting = false;
 
+// Cmd+Q requires a hold while sessions run (quit-hold-guard.js), macOS only:
+// elsewhere the menu keeps its stock Quit role.
+const QUIT_HOLD_GUARD_ACTIVE = process.platform === 'darwin';
+function quitApp() {
+  app.quit();
+}
+function hasRunningSessions() {
+  for (const [, session] of activeSessions) {
+    if (!session.exited) return true;
+  }
+  return false;
+}
+
 function createWindow() {
   // Restore saved window bounds
   const savedBounds = getSetting('global')?.windowBounds;
@@ -179,10 +193,24 @@ function createWindow() {
     `);
   });
 
+  const quitHoldGuard = createQuitHoldGuard({
+    isEnabled: () => getSetting('global')?.quitHoldGuard !== false,
+    hasRunningSessions,
+    quit: quitApp,
+    notify: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('quit-hold', state);
+    },
+  });
+  if (QUIT_HOLD_GUARD_ACTIVE) mainWindow.on('blur', quitHoldGuard.cancel);
+
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm
   // for reverse-i-search.
   mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (QUIT_HOLD_GUARD_ACTIVE && quitHoldGuard.handleInput(input)) {
+      event.preventDefault();
+      return;
+    }
     if (input.type !== 'keyDown') return;
     const key = input.key.toLowerCase();
     if (key === 'r' && input.meta) event.preventDefault();
@@ -241,7 +269,13 @@ function buildMenu() {
         { role: 'hideOthers' },
         { role: 'unhide' },
         { type: 'separator' },
-        { role: 'quit' },
+        // No accelerator on macOS: Cmd+Q goes through the hold-to-quit guard
+        // (before-input-event in createWindow) so an accidental Cmd+Q with
+        // running sessions doesn't kill them. Quitting from the menu is a
+        // deliberate action, so it quits immediately.
+        QUIT_HOLD_GUARD_ACTIVE
+          ? { label: `Quit ${app.name}`, click: () => quitApp() }
+          : { role: 'quit' },
       ],
     },
     {
@@ -1031,6 +1065,7 @@ const SETTING_DEFAULTS = {
   sidebarWidth: 340,
   terminalTheme: 'switchboard',
   mcpEmulation: false,
+  quitHoldGuard: true,
   shellProfile: 'auto',
   // Codex equivalents of the permission settings above. Kept separate because
   // the vocabularies do not map: codex has no permission modes, and Claude has

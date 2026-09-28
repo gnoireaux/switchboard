@@ -98,6 +98,7 @@
     const maxAgeValue = fieldValue('sessionMaxAgeDays', 3);
     const themeValue = fieldValue('terminalTheme', 'switchboard');
     const mcpEmulationValue = fieldValue('mcpEmulation', true);
+    const quitHoldGuardValue = fieldValue('quitHoldGuard', true);
     // Global-only: where new projects get their folder (projects.js). Empty
     // means the default, ~/Switchboard.
     const projectsRootValue = (!isProject && typeof current.projectsRoot === 'string') ? current.projectsRoot : '';
@@ -332,6 +333,16 @@
             <label class="settings-toggle"><input type="checkbox" id="sv-mcp-emulation" ${mcpEmulationValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
+
+        ${isMac ? `<div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Hold \u2318Q to Quit</span>
+            <div class="settings-description">While sessions are running, \u2318Q only quits after a 2 second hold, so a stray keystroke doesn't stop them. Quit from the menu is always immediate.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-quit-hold-guard" ${quitHoldGuardValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>` : ''}
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
@@ -454,6 +465,8 @@
         settings.sessionMaxAgeDays = parseInt(settingsViewerBody.querySelector('#sv-max-age').value) || 3;
         settings.terminalTheme = settingsViewerBody.querySelector('#sv-terminal-theme').value || 'switchboard';
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
+        const quitHoldGuardToggle = settingsViewerBody.querySelector('#sv-quit-hold-guard');
+        if (quitHoldGuardToggle) settings.quitHoldGuard = quitHoldGuardToggle.checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
       }
