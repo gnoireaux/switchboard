@@ -397,6 +397,22 @@ function parseTitleState(title) {
   return null;
 }
 
+// Claude asks whether to trust a folder it has not seen before, and it asks
+// before the input box exists: no idle title yet. The answer under the cursor
+// is "No, exit", so a prompt's submit key written into it ends the session.
+// Compared with all whitespace removed, since the TUI may move the cursor
+// between words instead of printing spaces.
+const TRUST_QUESTION = 'Yes, I trust this folder'.replace(/\s+/g, '');
+
+/** Whether the CLI's output so far shows a question the initial prompt must not answer. */
+function showsStartupQuestion(output) {
+  const text = String(output || '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-_]/g, '')
+    .replace(/\s+/g, '');
+  return text.includes(TRUST_QUESTION);
+}
+
 /**
  * What an OSC 9 notification means.
  *
@@ -487,6 +503,6 @@ module.exports = {
   deriveProjectPath,
   readSessionFile, toViewerEntries,
   needsIdDetection, readLaunchSignals, matchesLaunch,
-  parseTitleState, classifyNotification,
+  parseTitleState, classifyNotification, showsStartupQuestion,
   buildLaunchArgs,
 };

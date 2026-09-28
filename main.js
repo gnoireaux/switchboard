@@ -1656,9 +1656,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   // Type the initial prompt once the CLI is up. It is submitted only when the
   // launch request asked for it (trusted origin); otherwise the human reads it
   // and presses Enter. OSC 0 reporting idle is the signal that the input box
-  // exists; the timer covers a CLI that never reports one.
+  // exists; the timer covers a CLI that never reports one. A CLI still asking
+  // a startup question (folder trust) at the timeout keeps the prompt until
+  // the human has answered and the CLI reports idle.
   if (session._pendingInitialPrompt) {
     session._initialPromptTimer = setTimeout(() => {
+      session._initialPromptTimer = null;
+      if (harness?.showsStartupQuestion?.(session.outputBuffer.join(''))) {
+        log.info(`[initial-prompt] session=${sessionId} held: the CLI is asking a startup question; delivering once it is idle`);
+        return;
+      }
       deliverPendingInitialPrompt(session, sessionId, 'timeout');
     }, INITIAL_PROMPT_FALLBACK_MS);
   }
