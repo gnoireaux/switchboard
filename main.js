@@ -38,6 +38,7 @@ const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslS
 const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
+const sessionConfig = require('./public/session-config');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
 const { manageProjectEntry } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
@@ -1374,6 +1375,9 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
   if (!fs.existsSync(projectPath)) {
     return { ok: false, error: `project directory no longer exists: ${projectPath}` };
   }
+  // The options as the caller asked for them, before the project's folders are
+  // merged in: what a successor started through the launch socket inherits.
+  const requestedOptions = sessionOptions || null;
 
   // A session that never wrote a transcript cannot be resumed — the CLI has no
   // record of the id, and asking it to resume one produces an error the user
@@ -1610,6 +1614,7 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       spawnedAt: Date.now(),
     } : null,
     mcpServer, _openedAt: Date.now(),
+    launchOptions: isPlainTerminal ? null : sessionConfig.inheritableOptions(runtimeId, requestedOptions),
     _pendingInitialPrompt: isPlainTerminal ? null : buildInitialPromptWrites(sessionOptions?.initialPrompt, {
       autoSubmit: !!sessionOptions?.initialPromptAutoSubmit,
     }),
@@ -2356,15 +2361,20 @@ let launchSocket = null;
 // The spawner's filing, by the session id it sent. session_meta is keyed by
 // the real id; a live session still known by its temporary id (a harness that
 // learns its id late) is found through activeSessions.
+function liveLaunchSource(sessionId) {
+  for (const [id, session] of activeSessions) {
+    if (id === sessionId || session.realSessionId === sessionId) return { id, session };
+  }
+  return null;
+}
+
 function launchSourceAssignment(sessionId) {
   const meta = getMeta(sessionId);
   if (meta?.projectId) return { projectId: meta.projectId, trackId: meta.trackId || null };
-  for (const [id, session] of activeSessions) {
-    if (id !== sessionId && session.realSessionId !== sessionId) continue;
-    if (session.projectId) return { projectId: session.projectId, trackId: session.trackId || null };
-    const tempMeta = getMeta(id);
-    if (tempMeta?.projectId) return { projectId: tempMeta.projectId, trackId: tempMeta.trackId || null };
-  }
+  const live = liveLaunchSource(sessionId);
+  if (live?.session.projectId) return { projectId: live.session.projectId, trackId: live.session.trackId || null };
+  const tempMeta = live ? getMeta(live.id) : null;
+  if (tempMeta?.projectId) return { projectId: tempMeta.projectId, trackId: tempMeta.trackId || null };
   return null;
 }
 
@@ -2396,10 +2406,17 @@ function handleExternalLaunchRequest(request) {
     log.warn(`[launch-socket] refused unknown project ${request.cwd}`);
     return { ok: false, error: `not a Switchboard project: ${request.cwd}` };
   }
+  // A live spawner also hands on the options it was started with (model,
+  // effort, permission mode, CLI), so the successor runs the way it did.
+  const source = request.inheritFrom ? liveLaunchSource(request.inheritFrom) : null;
+  const inheritedOptions = source?.session.launchOptions || null;
+  if (inheritedOptions) log.info(`[launch-socket] inheriting options ${Object.keys(inheritedOptions).join(',')} from ${request.inheritFrom}`);
   mainWindow.webContents.send('launch-session-request', {
     projectPath: request.cwd,
     projectId: placement?.projectId || null,
     trackId: placement?.trackId || null,
+    handoffFrom: source ? request.inheritFrom : null,
+    inheritedOptions,
     initialPrompt: request.prompt,
     initialPromptAutoSubmit: request.autoSubmit,
   });

@@ -113,8 +113,27 @@
     return normalizeOverrides(runtime, out);
   }
 
+  // Fields a session started for one launch only. A worktree option would put
+  // a successor in a new worktree of the folder it was sent to.
+  const NOT_INHERITED = new Set(['worktree', 'worktreeName']);
+
+  /**
+   * The settings a successor takes over from a session started with options on
+   * runtime: that CLI's fields the caller set, and the CLI itself. One-shot
+   * launch flags (a prompt, a fork source, a plan item) are not fields, so they
+   * never pass.
+   */
+  function inheritableOptions(runtime, options) {
+    if (!runtime || !FIELDS[runtime]) return null;
+    const out = { runtime };
+    for (const field of fieldsFor(runtime)) {
+      if (!NOT_INHERITED.has(field.key) && own(options, field.key)) out[field.key] = options[field.key];
+    }
+    return out;
+  }
+
   const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, CLAUDE_EFFORTS, CODEX_EFFORTS, FIELDS, COMMON_FIELDS,
-    fieldsFor, fieldsBehindMore, normalizeOverrides, normalizeByCli, resolveOptions, own };
+    fieldsFor, fieldsBehindMore, normalizeOverrides, normalizeByCli, resolveOptions, own, inheritableOptions };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SessionConfig = api;
 })(typeof window !== 'undefined' ? window : globalThis);
