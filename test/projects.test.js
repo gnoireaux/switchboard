@@ -98,13 +98,14 @@ function setup({ folders = [], global = {} } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-projects-'));
   const db = makeFakeDb({ global: { projectsRoot: root, ...global } });
   let notified = 0;
+  const errors = [];
   projects.init({
     db,
-    log: { info() {}, error() {} },
+    log: { info() {}, error(...args) { errors.push(args.map(String).join(' ')); } },
     buildProjectsFromCache: () => folders,
     notifyRendererProjectsChanged: () => { notified++; },
   });
-  return { root, db, notifications: () => notified, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
+  return { root, db, notifications: () => notified, errors, cleanup: () => fs.rmSync(root, { recursive: true, force: true }) };
 }
 
 function tmpDir(prefix) {
@@ -123,7 +124,25 @@ function gitIn(repo, ...args) {
 
 /** A throwaway repository with one commit. */
 function makeRepo(name = 'switchboard-repo-') {
-  const repo = tmpDir(name);
+  return initRepo(tmpDir(name));
+}
+
+/**
+ * A repository nested in another, the way worktree containers live in a
+ * repository of their own: <outer>/<containerName>/z.main-tree holds the main
+ * checkout and <outer>/<containerName>/feat-a a linked worktree on feat-a.
+ */
+function makeWorktreeContainer(outer, containerName) {
+  const container = path.join(outer, containerName);
+  const main = path.join(container, 'z.main-tree');
+  fs.mkdirSync(main, { recursive: true });
+  initRepo(main);
+  const feature = path.join(container, 'feat-a');
+  gitIn(main, 'worktree', 'add', '-q', '-b', 'feat-a', feature);
+  return { container, main, feature };
+}
+
+function initRepo(repo) {
   gitIn(repo, 'init', '-q', '-b', 'main');
   gitIn(repo, 'config', 'user.email', 'test@example.com');
   gitIn(repo, 'config', 'user.name', 'Test');
@@ -600,7 +619,7 @@ test('project instructions stay in the project root and leave worktree instructi
   try {
     const plain = tmpDir('switchboard-plain-');
     try {
-      assert.match((await projects.createProject({ name: 'Plain', folders: [{ path: plain, mode: 'worktree' }] })).errors[0], /not inside a git repository/);
+      assert.match((await projects.createProject({ name: 'Plain', folders: [{ path: plain, mode: 'worktree' }] })).error, /not inside a git repository/);
     } finally { rm(plain); }
 
     fs.writeFileSync(path.join(repo, 'AGENTS.md'), '# Repo rules\nBe tidy.\n');
@@ -1145,6 +1164,113 @@ test('a new worktree gets the .env files the caller picked', { skip: !haveGit &&
 
     gitIn(repo, 'worktree', 'remove', '--force', wt.path);
   } finally { rm(repo); t.cleanup(); }
+});
+
+test('env discovery stops at a nested checkout: its .env belongs to it', () => {
+  const dir = tmpDir('switchboard-env-nested-');
+  const target = tmpDir('switchboard-env-nested-dst-');
+  try {
+    for (const name of ['.env', 'apps/web/.env', 'feat-a/.env', 'vendored/lib/.env.local']) {
+      fs.mkdirSync(path.dirname(path.join(dir, name)), { recursive: true });
+      fs.writeFileSync(path.join(dir, name), 'A=1\n');
+    }
+    // A linked worktree has a .git file, a nested repository a .git directory.
+    fs.writeFileSync(path.join(dir, 'feat-a', '.git'), 'gitdir: /elsewhere\n');
+    fs.mkdirSync(path.join(dir, 'vendored', '.git'));
+    assert.deepEqual(projects.listEnvFiles(dir), ['.env', path.join('apps', 'web', '.env')]);
+    assert.deepEqual(projects.copyEnvFiles(dir, target, ['feat-a/.env']).copied, [],
+      'a nested checkout\'s file cannot be copied by name either');
+  } finally { rm(dir); rm(target); }
+});
+
+test.describe('a folder inside a repository but not at its root', { skip: !haveGit && 'git not installed' }, () => {
+  test('inspectFolder names the repository root and lists the checkouts directly in the folder', async () => {
+    const t = setup();
+    const outer = makeRepo('switchboard-decoy-');
+    try {
+      const { container, main, feature } = makeWorktreeContainer(outer, 'infra');
+      fs.mkdirSync(path.join(container, 'notes'));
+      fs.mkdirSync(path.join(container, '.idea'));
+
+      const info = await projects.inspectFolder(container);
+      assert.equal(info.git, true);
+      assert.equal(info.isRoot, false);
+      assert.equal(fs.realpathSync(info.root), fs.realpathSync(outer));
+      assert.deepEqual(info.repos.map(r => [r.path, r.branch, r.main]), [
+        [main, 'main', true],
+        [feature, 'feat-a', false],
+      ], 'the main checkout first; plain and hidden folders are not listed');
+
+      const root = await projects.inspectFolder(main);
+      assert.equal(root.isRoot, true);
+      assert.deepEqual(root.repos, []);
+      const plain = tmpDir('switchboard-plain-');
+      try { assert.deepEqual(await projects.inspectFolder(plain), { git: false }); } finally { rm(plain); }
+      assert.deepEqual(await projects.inspectFolder('/definitely/not/here'), { git: false });
+    } finally { rm(outer); t.cleanup(); }
+  });
+
+  test('createProject refuses it as a worktree before making anything, and logs why', async () => {
+    const t = setup();
+    const outer = makeRepo('switchboard-decoy-');
+    const other = makeRepo('switchboard-repo-other-');
+    try {
+      const { container } = makeWorktreeContainer(outer, 'infra');
+      const result = await projects.createProject({
+        name: 'OTel',
+        folders: [{ path: other, mode: 'worktree' }, { path: container, mode: 'worktree' }],
+      });
+      assert.match(result.error, /infra: .*is not the root of a git repository/);
+      assert.deepEqual(t.db.rows.projects, [], 'no project row');
+      assert.equal(fs.existsSync(path.join(t.root, 'otel')), false, 'no project folder');
+      assert.equal(gitIn(other, 'branch', '--list', 'otel'), '', 'no branch made in the valid repository either');
+      assert.match(t.errors.join('\n'), /not creating "OTel".*not the root/);
+    } finally { rm(other); rm(outer); t.cleanup(); }
+  });
+
+  test('attachFolder refuses it as a worktree and logs why', async () => {
+    const t = setup();
+    const outer = makeRepo('switchboard-decoy-');
+    try {
+      const { container } = makeWorktreeContainer(outer, 'infra');
+      const { project } = await projects.createProject({ name: 'Later attach' });
+      const result = await projects.attachFolder(project.id, { path: container, mode: 'worktree' });
+      assert.match(result.error, /not the root/);
+      assert.deepEqual(t.db.listProjectFolders(project.id), []);
+      assert.match(t.errors.join('\n'), /could not attach a worktree of .*infra to "Later attach": .*not the root/);
+    } finally { rm(outer); t.cleanup(); }
+  });
+
+  test('checkouts picked from two containers are named after their containers; a clash under repos/ is refused up front', async () => {
+    const t = setup();
+    const outer = makeRepo('switchboard-decoy-');
+    try {
+      const infra = makeWorktreeContainer(outer, '9.infra');
+      const apps = makeWorktreeContainer(outer, '0.apps');
+
+      const clash = await projects.createProject({
+        name: 'Clash',
+        folders: [{ path: infra.main, mode: 'worktree' }, { path: apps.main, mode: 'worktree' }],
+      });
+      assert.match(clash.error, /already checked out at repos\/z\.main-tree/);
+      assert.deepEqual(t.db.rows.projects, []);
+
+      assert.match((await projects.createProject({ name: 'Bad', folders: [{ path: infra.main, mode: 'worktree', name: '../x' }] })).error, /Invalid folder name/);
+
+      const created = await projects.createProject({
+        name: 'OTel',
+        folders: [{ path: infra.main, mode: 'worktree', name: '9.infra' }, { path: apps.main, mode: 'worktree', name: '0.apps' }],
+      });
+      assert.equal(created.ok, true);
+      assert.deepEqual(created.errors, []);
+      const folders = created.project.folders;
+      assert.deepEqual(folders.map(f => [path.basename(f.path), f.sourcePath, f.branch]), [
+        ['9.infra', infra.main, 'otel'],
+        ['0.apps', apps.main, 'otel'],
+      ]);
+      assert.equal(gitIn(folders[0].path, 'rev-parse', '--abbrev-ref', 'HEAD'), 'otel');
+    } finally { rm(outer); t.cleanup(); }
+  });
 });
 
 // --- Scheduled tasks ---

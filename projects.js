@@ -531,7 +531,15 @@ function normalizeFolderSpec(spec) {
   const copyEnv = mode === 'worktree' && Array.isArray(spec.copyEnv)
     ? spec.copyEnv.filter(name => typeof name === 'string')
     : [];
-  return { path: path.resolve(folderPath), mode, branch: typeof spec.branch === 'string' ? spec.branch.trim() : '', copyEnv };
+  // The folder name under repos/, when it should not be the source's own
+  // name: a worktree picked from a container of worktrees takes the container's.
+  const name = mode === 'worktree' && typeof spec.name === 'string' ? spec.name.trim() : '';
+  if (name && !isPlainDirName(name)) return { error: `Invalid folder name: ${name}` };
+  return { path: path.resolve(folderPath), mode, branch: typeof spec.branch === 'string' ? spec.branch.trim() : '', copyEnv, name };
+}
+
+function isPlainDirName(name) {
+  return name !== '.' && name !== '..' && !/[\/\\\0]/.test(name);
 }
 
 // realpath of the longest existing ancestor, with the rest joined back on.
@@ -641,6 +649,21 @@ async function createProject(spec) {
     return { error: `A folder named "${slug}" already exists in ${rootDir}` };
   }
 
+  // Check every worktree before anything is made: a project that loses its
+  // repositories after Create is worse than a dialog that says why up front.
+  const planned = [];
+  const problems = [];
+  const draft = { id: null, root, slug, sharedBranch: spec.sharedBranch === undefined ? true : !!spec.sharedBranch, branchName };
+  for (const f of folders.filter(f => f.mode === 'worktree')) {
+    const plan = await planWorktree(draft, f, planned);
+    if (plan.error) problems.push(`${f.path}: ${plan.error}`);
+    else planned.push({ path: plan.target, sourcePath: plan.source });
+  }
+  if (problems.length) {
+    log.error?.(`[projects] not creating "${name}": ${problems.join('; ')}`);
+    return { error: problems.join('\n') };
+  }
+
   // In-place folders are listed in the brief right away; worktree folders
   // are added after the row exists, since their path is only known once the
   // checkout is made.
@@ -674,7 +697,7 @@ async function createProject(spec) {
 
   const errors = [];
   for (const f of folders.filter(f => f.mode === 'worktree')) {
-    const result = await attachWorktree(db.getProject(row.id), { path: f.path, branch: f.branch, copyEnv: f.copyEnv }, { notify: false });
+    const result = await attachWorktree(db.getProject(row.id), { path: f.path, branch: f.branch, copyEnv: f.copyEnv, name: f.name }, { notify: false });
     if (result.error) errors.push(`${f.path}: ${result.error}`);
   }
 
@@ -798,7 +821,10 @@ function listEnvFiles(dir) {
     for (const entry of entries) {
       const relativePath = path.join(relativeDir, entry.name);
       if (entry.isDirectory()) {
-        if (!entry.name.startsWith('.') && !ENV_SKIP_DIRS.has(entry.name)) pending.push(relativePath);
+        // A directory with its own .git is another checkout (a nested repo,
+        // a worktree, a submodule): its .env belongs to it, not to this one.
+        if (!entry.name.startsWith('.') && !ENV_SKIP_DIRS.has(entry.name)
+          && !fs.existsSync(path.join(root, relativePath, '.git'))) pending.push(relativePath);
         continue;
       }
       // Do not follow symlinks, including links to directories outside the repo.
@@ -864,6 +890,17 @@ function worktreeBranchFor(project, requested) {
  * Switchboard writes no instruction files or ignore rules in the repository.
  */
 async function attachWorktree(project, spec, { notify = true } = {}) {
+  const result = await addWorktree(project, spec, { notify });
+  if (result.error) log.error?.(`[projects] could not attach a worktree of ${spec?.path} to "${project.name}": ${result.error}`);
+  return result;
+}
+
+/**
+ * Everything attachWorktree checks before it touches the disk: the source is
+ * a repository root, the branch name is valid, and repos/<name> is free.
+ * existing holds the project's folders, or the ones planned so far.
+ */
+async function planWorktree(project, spec, existing) {
   const source = typeof spec?.path === 'string' ? path.resolve(spec.path.trim()) : '';
   if (!source || !isDirectory(source)) return { error: `Not a directory: ${source || spec?.path}` };
   let top;
@@ -873,12 +910,21 @@ async function attachWorktree(project, spec, { notify = true } = {}) {
   }
   const branch = worktreeBranchFor(project, spec.branch);
   if (!BRANCH_NAME_RE.test(branch)) return { error: `Invalid branch name: ${branch}` };
+  const name = typeof spec.name === 'string' && spec.name.trim() ? spec.name.trim() : path.basename(source);
+  if (!isPlainDirName(name)) return { error: `Invalid folder name: ${name}` };
 
-  const existing = db.listProjectFolders(project.id);
   if (existing.some(f => f.sourcePath === source)) return { error: 'That repository is already attached on a branch' };
-  const target = path.join(project.root, REPOS_DIR, path.basename(source));
+  const target = path.join(project.root, REPOS_DIR, name);
+  if (existing.some(f => f.path === target)) return { error: `Another repository is already checked out at ${REPOS_DIR}/${name}` };
   if (fs.existsSync(target)) return { error: `${target} already exists` };
-  if (existing.some(f => f.path === target)) return { error: 'That folder is already attached' };
+  return { source, target, branch };
+}
+
+async function addWorktree(project, spec, { notify }) {
+  const existing = db.listProjectFolders(project.id);
+  const plan = await planWorktree(project, spec, existing);
+  if (plan.error) return { error: plan.error };
+  const { source, target, branch } = plan;
 
   try {
     fs.mkdirSync(path.join(project.root, REPOS_DIR), { recursive: true });
@@ -1786,6 +1832,47 @@ async function folderGitInfo(folderPath, { force = false } = {}) {
   return status;
 }
 
+const CHILD_REPOS_MAX = 50;
+
+/**
+ * What the new project dialog needs to know about a folder before it offers a
+ * worktree: folderGitInfo plus the repository root, and whether the folder is
+ * that root. A folder inside a repository but not at its root cannot be
+ * checked out on a branch itself, so it also lists the checkouts directly in
+ * it (a folder that holds several worktrees of one repository, say).
+ */
+async function inspectFolder(folderPath) {
+  const dir = typeof folderPath === 'string' ? path.resolve(folderPath.trim()) : '';
+  if (!dir || !isDirectory(dir)) return { git: false };
+  const info = await folderGitInfo(dir, { force: true });
+  if (!info.git) return info;
+  let root;
+  try { root = await git.repoRoot(dir); } catch { return info; }
+  const isRoot = realOrResolved(root) === realOrResolved(dir);
+  return { ...info, root, isRoot, repos: isRoot ? [] : await childRepos(dir) };
+}
+
+/** Direct, non-hidden subfolders that are the root of a checkout, the main checkout first. */
+async function childRepos(dir) {
+  let entries;
+  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; }
+  const candidates = entries
+    .filter(e => e.isDirectory() && !e.name.startsWith('.') && fs.existsSync(path.join(dir, e.name, '.git')))
+    .map(e => path.join(dir, e.name))
+    .sort()
+    .slice(0, CHILD_REPOS_MAX);
+  const repos = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      if (realOrResolved(await git.repoRoot(candidate)) !== realOrResolved(candidate)) return null;
+      const { branch } = await git.status(candidate);
+      // The main checkout keeps its .git as a directory; a linked worktree has a .git file.
+      const main = isDirectory(path.join(candidate, '.git'));
+      return { path: candidate, branch, main };
+    } catch { return null; }
+  }));
+  return repos.filter(Boolean).sort((a, b) => Number(b.main) - Number(a.main));
+}
+
 /** { ok, byPath: { [folderPath]: folderGitInfo(folderPath) } } for every folder of a project. */
 async function folderGitStatus(projectId, { force = false } = {}) {
   if (!db.getProject(projectId)) throw new Error('Project not found');
@@ -1821,7 +1908,7 @@ module.exports = {
   init,
   projectsRoot, slugify, uniqueSlug, defaultBrief,
   createProject, updateProject, deleteProject, attachFolder, detachFolder,
-  folderGitStatus, folderGitInfo, projectGitInfo, projectGitDiff,
+  folderGitStatus, folderGitInfo, inspectFolder, projectGitInfo, projectGitDiff,
   syncProjectBrief, syncAllProjectBriefs, saveBrief, createProjectFile, addProjectFiles, listAddedFiles, listRecentProjectFiles,
   launchContext, mergeAddDirs, worktreeParentFor,
   PROJECT_FILES, ADDED_FILES_DIR,

@@ -60,6 +60,7 @@ contextBridge.exposeInMainWorld('api', {
   getProjectGitInfo: (id) => ipcRenderer.invoke('get-project-git-info', id),
   getProjectGitDiff: (id, folderPath, filePath) => ipcRenderer.invoke('get-project-git-diff', id, folderPath, filePath),
   getFolderGitStatus: (folderPath) => ipcRenderer.invoke('get-folder-git-status', folderPath),
+  inspectProjectFolder: (folderPath) => ipcRenderer.invoke('inspect-project-folder', folderPath),
   listEnvFiles: (folderPath) => ipcRenderer.invoke('list-env-files', folderPath),
   saveProjectBrief: (id, content) => ipcRenderer.invoke('save-project-brief', id, content),
   createProjectFile: (id, name, content) => ipcRenderer.invoke('create-project-file', id, name, content),

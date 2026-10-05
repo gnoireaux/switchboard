@@ -3112,30 +3112,59 @@ async function attachFolderAsk(project) {
   const folder = await window.api.browseFolder();
   if (!folder) return;
   let info = { git: false };
-  try { info = await window.api.getFolderGitStatus(folder); } catch {}
-  const mode = info?.git ? await askRepoMode(folder, info) : 'in-place';
-  if (!mode) return;
-  await attachFolderFlow(project, mode, folder);
+  try { info = await window.api.inspectProjectFolder(folder); } catch {}
+  const choice = info?.git ? await askRepoMode(folder, info) : { mode: 'in-place', path: folder, name: '' };
+  if (!choice) return;
+  await attachFolderFlow(project, choice.mode, choice.path, choice.name);
 }
 
-/** The repository question as a small dialog. Resolves 'in-place', 'worktree' or null. */
+/**
+ * The repository question for one folder, as { question, options } HTML. A
+ * repository root offers in place or a new worktree. A folder inside a
+ * repository but not at its root cannot have a worktree of its own: it offers
+ * the checkouts directly in it (a folder of worktrees) or the whole
+ * repository, a checkout from the folder keeping the folder's name under
+ * repos/. Each button carries data-mode, data-path and data-name.
+ */
+function repoAskHtml(folderPath, info) {
+  const opt = (label, help, { mode, path = folderPath, name = '', wt = false }) =>
+    `<div class="np-ask-opt"><button type="button" class="ws-btn np-ask-btn${wt ? ' np-ask-btn--wt' : ''}" data-mode="${mode}" data-path="${escapeHtml(path)}" data-name="${escapeHtml(name)}" title="${escapeHtml(label)}"><span class="np-ask-label">${escapeHtml(label)}</span></button><div class="np-help">${help}</div></div>`;
+  const inPlace = opt('As it is', 'Sessions work in the folder, on whatever is checked out.', { mode: 'in-place' });
+  if (info?.isRoot !== false) {
+    return {
+      question: `This is a git repository${info?.branch ? `, on ${escapeHtml(info.branch)}` : ''}. How should the project work in it?`,
+      options: `<div class="np-ask-opts">${inPlace}${opt('New worktree', 'A worktree under the project on its branch. Your checkout is untouched.', { mode: 'worktree', wt: true })}</div>`,
+    };
+  }
+  const name = pathBasename(folderPath);
+  const repos = (info.repos || []).map(r => opt(`Worktree of ${pathBasename(r.path)}`,
+    `From ${escapeHtml(r.branch || 'HEAD')}${r.main ? ', the main checkout' : ''}. Lands in repos/${escapeHtml(name)}.`,
+    { mode: 'worktree', path: r.path, name, wt: true }));
+  const whole = opt(`Worktree of ${pathBasename(info.root)}`, `The whole repository at ${escapeHtml(info.root)}.`, { mode: 'worktree', path: info.root, wt: true });
+  return {
+    question: `This folder is inside the git repository <span class="mono">${escapeHtml(info.root)}</span>, not at its root, so it cannot have a worktree of its own.`
+      + (repos.length ? ' Pick one of the checkouts in it, or:' : ''),
+    options: (repos.length ? `<div class="np-ask-opts np-ask-repos">${repos.join('')}</div>` : '')
+      + `<div class="np-ask-opts">${inPlace}${whole}</div>`,
+  };
+}
+
+/** The repository question as a small dialog. Resolves { mode, path, name } or null. */
 function askRepoMode(folderPath, info) {
   return new Promise(resolve => {
     const overlay = document.createElement('div');
     overlay.className = 'add-project-overlay';
     const dialog = document.createElement('div');
     dialog.className = 'add-project-dialog ws-prompt np-ask-dialog';
+    const ask = repoAskHtml(folderPath, info);
     dialog.innerHTML = `
       <h3>${escapeHtml(pathBasename(folderPath))}</h3>
-      <div class="add-project-hint">This is a git repository${info?.branch ? `, on ${escapeHtml(info.branch)}` : ''}. How should the project work in it?</div>
-      <div class="np-ask-opts">
-        <div class="np-ask-opt"><button type="button" class="ws-btn np-ask-btn" data-mode="in-place">As it is</button><div class="np-help">Sessions work in the folder, on whatever is checked out.</div></div>
-        <div class="np-ask-opt"><button type="button" class="ws-btn np-ask-btn np-ask-btn--wt" data-mode="worktree">New worktree</button><div class="np-help">A worktree under the project on its branch. Your checkout is untouched.</div></div>
-      </div>
+      <div class="add-project-hint">${ask.question}</div>
+      ${ask.options}
       <div class="add-project-actions"><button class="add-project-cancel-btn" type="button">Cancel</button></div>`;
     const done = (value) => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(value); };
     function onKey(e) { if (e.key === 'Escape') done(null); }
-    dialog.querySelectorAll('.np-ask-btn').forEach(btn => { btn.onclick = () => done(btn.dataset.mode); });
+    dialog.querySelectorAll('.np-ask-btn').forEach(btn => { btn.onclick = () => done({ mode: btn.dataset.mode, path: btn.dataset.path, name: btn.dataset.name }); });
     dialog.querySelector('.add-project-cancel-btn').onclick = () => done(null);
     document.addEventListener('keydown', onKey);
     overlay.appendChild(dialog);
@@ -3352,15 +3381,15 @@ async function renameTrackFlow(project, track) {
   loadProjects();
 }
 
-async function attachFolderFlow(project, mode, folderPath = null) {
+async function attachFolderFlow(project, mode, folderPath = null, name = '') {
   const folder = folderPath || await window.api.browseFolder();
   if (!folder) return;
   let branch = null;
   if (mode === 'worktree' && !projectBranchName(project)) {
-    branch = await showPromptDialog({ title: `Branch for ${pathBasename(folder)}`, label: 'Branch name', placeholder: project.slug, confirm: 'Attach' });
+    branch = await showPromptDialog({ title: `Branch for ${name || pathBasename(folder)}`, label: 'Branch name', placeholder: project.slug, confirm: 'Attach' });
     if (!branch) return;
   }
-  const result = await window.api.attachProjectFolder(project.id, { path: folder, mode, branch });
+  const result = await window.api.attachProjectFolder(project.id, { path: folder, mode, branch, name });
   if (result?.error) { alert(result.error); return; }
   loadProjects();
 }
@@ -3882,7 +3911,8 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
 
   // mode is null until the folder is known: a plain folder becomes in-place on
   // its own, a repository asks. A caller may decide up front with f.mode.
-  const folders = initialFolders.map(f => ({ path: f.path, mode: f.mode || null, branch: '', git: null, envFiles: [], copyEnv: new Set() }));
+  // name: the folder under repos/ when it is not the checkout's own (one picked from a folder of worktrees).
+  const folders = initialFolders.map(f => ({ path: f.path, mode: f.mode || null, name: '', branch: '', git: null, envFiles: [], copyEnv: new Set() }));
   let root = '~/Switchboard';
   try { root = (await window.api.getProjectsRoot()) || root; } catch {}
   const shortPath = (p) => (typeof shortProjectPath === 'function' ? shortProjectPath(p) : p);
@@ -3891,6 +3921,7 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
   // With one shared name every worktree uses it; otherwise each repo names its own, defaulting to the slug.
   const branchFor = (folder) => (sharedBox.checked ? branchName() : (folder.branch.trim() || slug()));
   const hasWorktree = () => folders.some(f => f.mode === 'worktree');
+  const repoDirName = (folder) => folder.name || pathBasename(folder.path);
 
   function renderBranchLine() {
     const any = hasWorktree();
@@ -3927,11 +3958,11 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
       row.dataset.path = folder.path;
       let detail;
       if (folder.git === null) detail = shortPath(folder.path) + ' · checking…';
-      else if (folder.mode === 'worktree') detail = `worktree · repos/${pathBasename(folder.path)} · ${branchFor(folder)}`;
+      else if (folder.mode === 'worktree') detail = `worktree · repos/${repoDirName(folder)} · ${branchFor(folder)}${folder.name ? ` · from ${shortPath(folder.path)}` : ''}`;
       else if (isRepo) detail = `${asking ? '' : 'in place · '}on ${folder.git.branch} · ${shortPath(folder.path)}`;
       else detail = `in place · ${shortPath(folder.path)}`;
       row.innerHTML = `<span class="np-folder-icon${folder.mode === 'worktree' ? ' is-worktree' : ''}">${folder.mode === 'worktree' ? PICONS.branch(13) : PICONS.folder(13)}</span>` +
-        `<span class="np-folder-name">${escapeHtml(pathBasename(folder.path))}</span>` +
+        `<span class="np-folder-name">${escapeHtml(folder.mode === 'worktree' ? repoDirName(folder) : pathBasename(folder.path))}</span>` +
         `<span class="np-folder-path mono" title="${escapeHtml(folder.path)}">${escapeHtml(detail)}</span>`;
       const remove = document.createElement('button');
       remove.type = 'button';
@@ -3944,12 +3975,9 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
         // The one decision a repository needs, asked once, where it matters.
         const ask = document.createElement('div');
         ask.className = 'np-ask';
-        ask.innerHTML = `<div class="np-ask-q">This is a git repository. How should the project work in it?</div>
-          <div class="np-ask-opts">
-            <div class="np-ask-opt"><button type="button" class="ws-btn np-ask-btn" data-mode="in-place">As it is</button><div class="np-help">Sessions work in the folder, on whatever is checked out.</div></div>
-            <div class="np-ask-opt"><button type="button" class="ws-btn np-ask-btn np-ask-btn--wt" data-mode="worktree">New worktree</button><div class="np-help">A worktree under the project on its branch. Your checkout is untouched.</div></div>
-          </div>`;
-        ask.querySelectorAll('.np-ask-btn').forEach(btn => { btn.onclick = () => { folder.mode = btn.dataset.mode; renderFolders(); renderPreview(); }; });
+        const html = repoAskHtml(folder.path, folder.git);
+        ask.innerHTML = `<div class="np-ask-q">${html.question}</div>${html.options}`;
+        ask.querySelectorAll('.np-ask-btn').forEach(btn => { btn.onclick = () => chooseRepoMode(folder, btn.dataset); });
         row.appendChild(ask);
       }
       // git worktree add checks out tracked files only, so the repository's
@@ -4056,7 +4084,7 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
     if (worktrees.length) {
       tree.push(`<span class="np-tree-item np-tree-dir">repos/</span>`);
       for (const f of worktrees) {
-        tree.push(`<span class="np-tree-sub">${PICONS.branch(11)}${escapeHtml(pathBasename(f.path))} <em>· branch ${escapeHtml(branchFor(f))}</em></span>`);
+        tree.push(`<span class="np-tree-sub">${PICONS.branch(11)}${escapeHtml(repoDirName(f))} <em>· branch ${escapeHtml(branchFor(f))}</em></span>`);
         const env = f.envFiles.filter(name => f.copyEnv.has(name));
         if (env.length) tree.push(`<span class="np-tree-sub np-tree-env"><em>copied in: ${escapeHtml(env.join(', '))}</em></span>`);
       }
@@ -4080,21 +4108,49 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
 
   async function addFolder(folderPath) {
     if (!folderPath || folders.some(f => f.path === folderPath)) return;
-    const folder = { path: folderPath, mode: null, branch: '', git: null, envFiles: [], copyEnv: new Set() };
+    const folder = { path: folderPath, mode: null, name: '', branch: '', git: null, envFiles: [], copyEnv: new Set() };
     folders.push(folder);
     renderFolders();
     renderPreview();
-    // A worktree only gets the repository's tracked files, so ask the folder
-    // what .env files it has at the same time as its git state.
+    await inspectFolder(folder);
+  }
+
+  // A worktree only gets the repository's tracked files, so ask the folder
+  // what .env files it has at the same time as its git state.
+  async function inspectFolder(folder) {
+    const folderPath = folder.path;
     const [git, env] = await Promise.all([
-      window.api.getFolderGitStatus(folderPath).catch(() => ({ git: false })),
+      window.api.inspectProjectFolder(folderPath).catch(() => ({ git: false })),
       window.api.listEnvFiles(folderPath).catch(() => null),
     ]);
+    if (folder.path !== folderPath) return;
     folder.git = git || { git: false };
     folder.envFiles = env?.files || [];
     folder.copyEnv = new Set(env?.defaults || []);
     if (!folder.git?.git && folder.mode === null) folder.mode = 'in-place';
     if (folders.includes(folder)) { renderFolders(); renderPreview(); }
+  }
+
+  // A checkout picked from inside the folder replaces it in the list; the
+  // folder's own name stays as the name under repos/.
+  async function chooseRepoMode(folder, { mode, path: chosen, name }) {
+    showError('');
+    if (chosen && chosen !== folder.path) {
+      if (folders.some(f => f !== folder && f.path === chosen)) { showError(`${chosen} is already in the list.`); return; }
+      folder.path = chosen;
+      folder.name = name || '';
+      folder.mode = mode;
+      folder.git = null;
+      folder.envFiles = [];
+      folder.copyEnv = new Set();
+      renderFolders();
+      renderPreview();
+      await inspectFolder(folder);
+      return;
+    }
+    folder.mode = mode;
+    renderFolders();
+    renderPreview();
   }
 
   async function create() {
@@ -4110,6 +4166,7 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
         folders: folders.map(f => ({
           path: f.path,
           mode: f.mode || 'in-place',
+          name: f.mode === 'worktree' ? f.name : '',
           branch: f.mode === 'worktree' && !sharedBox.checked ? f.branch.trim() : '',
           copyEnv: f.mode === 'worktree' ? f.envFiles.filter(name => f.copyEnv.has(name)) : [],
         })),
@@ -4150,17 +4207,6 @@ async function showNewProjectDialog({ name: initialName = '', folders: initialFo
 
   renderFolders();
   renderPreview();
-  for (const folder of folders) {
-    Promise.all([
-      window.api.getFolderGitStatus(folder.path).catch(() => ({ git: false })),
-      window.api.listEnvFiles(folder.path).catch(() => null),
-    ]).then(([git, env]) => {
-      folder.git = git || { git: false };
-      folder.envFiles = env?.files || [];
-      folder.copyEnv = new Set(env?.defaults || []);
-      if (!folder.git?.git && folder.mode === null) folder.mode = 'in-place';
-      renderFolders(); renderPreview();
-    }).catch(() => {});
-  }
+  for (const folder of folders) inspectFolder(folder).catch(() => {});
   nameInput.focus();
 }
