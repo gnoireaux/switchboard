@@ -544,6 +544,9 @@ for (const version of [4, 12]) {
         db.exec('CREATE TABLE cache_meta (folder TEXT PRIMARY KEY, projectPath TEXT, indexMtimeMs REAL)');
         db.exec('CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT)');
         db.prepare("INSERT INTO settings (key, value) VALUES ('db_version', ?)").run('${version}');
+        // The one-time Codex timestamp re-read drops codex/* folder gates on
+        // purpose; mark it done so this test sees only the schema migration.
+        db.prepare("INSERT INTO settings (key, value) VALUES ('codex_message_timestamps_v1', 'true')").run();
         db.prepare(\`INSERT INTO session_cache (sessionId, folder, summary, runtime, sessionFile)
           VALUES ('kept', 'codex/day', 'Existing session', 'codex', '/original/rollout.jsonl')\`).run();
         db.prepare("INSERT INTO cache_meta VALUES ('codex/day', NULL, 123)").run();
