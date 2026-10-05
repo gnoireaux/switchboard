@@ -570,6 +570,8 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
   // transcript yet shows when it started.
   parts.push(`<span>${escapeHtml(formatDate(new Date(session.modified || sessionEventTime(session))))}</span>`);
   if (session.messageCount) parts.push(`<span class="pane-sep">·</span><span>${session.messageCount} msgs</span>`);
+  const contextLabel = contextTokensLabel(session.contextTokens);
+  if (contextLabel) parts.push(`<span class="pane-sep">·</span><span>${contextLabel}</span>`);
   row.innerHTML = `<span class="pane-title">${escapeHtml(sessionTitle(session))}</span><span class="pane-meta">${parts.join('')}</span>`;
   // A floating button, shown on hover: dismiss a session that never started
   // (nothing to archive), otherwise archive or unarchive.
