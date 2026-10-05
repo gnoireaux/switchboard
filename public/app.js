@@ -1587,11 +1587,14 @@ window.api.onStatusUpdate((text, type) => {
 // --- Auto-update status + toast ---
 const statusBarUpdater = document.getElementById('status-bar-updater');
 let updaterStatusTimer = null;
+// Shown again once a timed message expires, so a transient updater message
+// (e.g. "Update check failed") cannot wipe the newer-build notice for good.
+let updaterRestingStatus = '';
 function setUpdaterStatus(text, duration) {
   if (updaterStatusTimer) clearTimeout(updaterStatusTimer);
   statusBarUpdater.textContent = text;
   if (duration) {
-    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = ''; }, duration);
+    updaterStatusTimer = setTimeout(() => { statusBarUpdater.textContent = updaterRestingStatus; }, duration);
   }
 }
 const updaterHandler = (type, data) => {
@@ -1639,12 +1642,14 @@ let installedBuildToastShown = false;
 function showInstalledBuildChange(label) {
   const toast = document.getElementById('update-toast');
   if (!label) {
+    updaterRestingStatus = '';
     setUpdaterStatus('');
     if (installedBuildToastShown) toast.classList.add('hidden');
     installedBuildToastShown = false;
     return;
   }
-  setUpdaterStatus(`New build ${label} installed — restart to use it`);
+  updaterRestingStatus = `New build ${label} installed — restart to use it`;
+  setUpdaterStatus(updaterRestingStatus);
   if (localStorage.getItem('installed-build-dismissed') === label) return;
   document.getElementById('update-toast-msg').innerHTML =
     `New Build Installed<br><span class="update-version">${escapeHtml(label)}</span>`;
