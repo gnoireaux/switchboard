@@ -3138,12 +3138,12 @@ function repoAskHtml(folderPath, info) {
   }
   const name = pathBasename(folderPath);
   const repos = (info.repos || []).map(r => opt(`Worktree of ${pathBasename(r.path)}`,
-    `From ${escapeHtml(r.branch || 'HEAD')}${r.main ? ', the main checkout' : ''}. Lands in repos/${escapeHtml(name)}.`,
+    `From ${escapeHtml(r.branch || 'HEAD')}${r.main ? ', the main checkout' : ''}.`,
     { mode: 'worktree', path: r.path, name, wt: true }));
   const whole = opt(`Worktree of ${pathBasename(info.root)}`, `The whole repository at ${escapeHtml(info.root)}.`, { mode: 'worktree', path: info.root, wt: true });
   return {
     question: `This folder is inside the git repository <span class="mono">${escapeHtml(info.root)}</span>, not at its root, so it cannot have a worktree of its own.`
-      + (repos.length ? ' Pick one of the checkouts in it, or:' : ''),
+      + (repos.length ? ` Pick one of the checkouts in it (checked out as repos/${escapeHtml(name)}), or:` : ''),
     options: (repos.length ? `<div class="np-ask-opts np-ask-repos">${repos.join('')}</div>` : '')
       + `<div class="np-ask-opts">${inPlace}${whole}</div>`,
   };
