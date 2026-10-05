@@ -52,11 +52,17 @@ function formatDate(date) {
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
-// Format current context-window size (tokens) as a ' · Nk ctx' suffix.
+// Format current context-window size (tokens) as 'Nk ctx'.
 // Returns '' when unknown or below 1k (too small to be worth showing).
-function formatContextTokens(tokens) {
+function contextTokensLabel(tokens) {
   if (!tokens || tokens < 1000) return '';
-  return ' · ' + Math.round(tokens / 1000) + 'k ctx';
+  return Math.round(tokens / 1000) + 'k ctx';
+}
+
+// The same label as a ' · Nk ctx' suffix, or ''.
+function formatContextTokens(tokens) {
+  const label = contextTokensLabel(tokens);
+  return label ? ' · ' + label : '';
 }
 
 function escapeHtml(str) {
