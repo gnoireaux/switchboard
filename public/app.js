@@ -1627,8 +1627,36 @@ const updaterHandler = (type, data) => {
     case 'error':
       setUpdaterStatus('Update check failed', 5000);
       break;
+    case 'installed-build-changed':
+      showInstalledBuildChange(data && data.label);
+      break;
   }
 };
+
+// A different build was installed over this running bundle; restarting runs it.
+// Separate from the release flow above: no version number, no release notes.
+let installedBuildToastShown = false;
+function showInstalledBuildChange(label) {
+  const toast = document.getElementById('update-toast');
+  if (!label) {
+    setUpdaterStatus('');
+    if (installedBuildToastShown) toast.classList.add('hidden');
+    installedBuildToastShown = false;
+    return;
+  }
+  setUpdaterStatus(`New build ${label} installed — restart to use it`);
+  if (localStorage.getItem('installed-build-dismissed') === label) return;
+  document.getElementById('update-toast-msg').innerHTML =
+    `New Build Installed<br><span class="update-version">${escapeHtml(label)}</span>`;
+  toast.classList.remove('hidden');
+  installedBuildToastShown = true;
+  document.getElementById('update-restart-btn').onclick = () => window.api.relaunchForInstalledBuild();
+  document.getElementById('update-dismiss-btn').onclick = () => {
+    toast.classList.add('hidden');
+    installedBuildToastShown = false;
+    localStorage.setItem('installed-build-dismissed', label);
+  };
+}
 window.api.onUpdaterEvent(updaterHandler);
 
 // --- Quota gauges in status bar ---

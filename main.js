@@ -47,6 +47,7 @@ protocol.registerSchemesAsPrivileged(PREVIEW_SCHEMES);
 const { createTaskManager } = require('./task-manager');
 const { lastAssistantMessage } = require('./session-preview');
 const { instanceLabel } = require('./instance-label');
+const { createInstalledBuildWatcher, pendingBuildTitleSuffix } = require('./installed-build-watch');
 const { spawn: spawnChildProcess } = require('child_process');
 const {
   AGENT_POLL_INTERVAL_MS,
@@ -115,6 +116,35 @@ const MAX_BUFFER_SIZE = 256 * 1024;
 // Active PTY sessions
 const activeSessions = new Map();
 let mainWindow = null;
+
+// --- Newer build installed over the running bundle (packaged builds only) ---
+// Rebuilding a bundle in /Applications while it runs leaves this process on the
+// old code; tell the user a restart would pick up the new build.
+const RUNNING_BUILD_LABEL = require('./package.json').buildLabel;
+const INSTALLED_BUILD_CHECK_MS = 60 * 1000;
+let baseWindowTitle = null;
+let installedBuildWatcher = null;
+
+function sendInstalledBuildState() {
+  if (!installedBuildWatcher || !mainWindow || mainWindow.isDestroyed()) return;
+  const pending = installedBuildWatcher.getPending();
+  if (baseWindowTitle) mainWindow.setTitle(baseWindowTitle + pendingBuildTitleSuffix(RUNNING_BUILD_LABEL, pending));
+  mainWindow.webContents.send('updater-event', 'installed-build-changed', { label: pending });
+}
+
+function startInstalledBuildWatch() {
+  if (!app.isPackaged || !RUNNING_BUILD_LABEL) return;
+  installedBuildWatcher = createInstalledBuildWatcher({
+    // Plain fs: Electron's asar-aware fs would treat app.asar as a directory.
+    fs: require('original-fs'),
+    asarPath: path.join(process.resourcesPath, 'app.asar'),
+    runningLabel: RUNNING_BUILD_LABEL,
+    onChange: sendInstalledBuildState,
+    log,
+  });
+  installedBuildWatcher.check();
+  setInterval(() => installedBuildWatcher.check(), INSTALLED_BUILD_CHECK_MS);
+}
 let appIsQuitting = false;
 
 // Quit guard: Cmd+Q requires a 2s hold when sessions are running (see
@@ -162,9 +192,10 @@ function createWindow() {
     execPath: process.execPath,
     platform: process.platform,
     isPackaged: app.isPackaged,
-    buildLabel: require('./package.json').buildLabel,
+    buildLabel: RUNNING_BUILD_LABEL,
     dataDir: process.env.SWITCHBOARD_DATA_DIR,
   });
+  baseWindowTitle = windowTitle;
 
   mainWindow = new BrowserWindow({
     ...bounds,
@@ -220,7 +251,10 @@ function createWindow() {
       };
       void 0;
     `);
+    // A reload or a re-created window must still show a build installed earlier.
+    sendInstalledBuildState();
   });
+  mainWindow.on('focus', () => installedBuildWatcher?.check());
 
   // Cmd+Q hold-to-quit guard. The menu's Quit item has no accelerator, so Cmd+Q
   // arrives here instead of triggering an immediate quit. With running sessions,
@@ -2464,6 +2498,10 @@ ipcMain.handle('updater-install', () => {
   if (!autoUpdater) return;
   autoUpdater.quitAndInstall();
 });
+ipcMain.handle('relaunch-for-installed-build', () => {
+  app.relaunch();
+  app.quit();
+});
 
 // --- App lifecycle ---
 // Prevent a second Electron instance from killing active PTY sessions.
@@ -2549,6 +2587,8 @@ function startScheduleTicker() {
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change)
     if (searchFtsRecreated) populateCacheViaWorker();
+
+    startInstalledBuildWatch();
 
     // Check for updates after launch
     if (autoUpdater) {
