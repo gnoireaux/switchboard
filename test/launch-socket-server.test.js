@@ -85,7 +85,7 @@ test('cwd must be present and absolute', () => {
 
 test('a valid request keeps the prompt and defaults autoSubmit to off', () => {
   const ok = parseLaunchRequest('{"token":"s","cwd":"/tmp/./proj","prompt":"continue"}', 's');
-  assert.deepEqual(ok, { ok: true, request: { cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false, inheritFrom: null } });
+  assert.deepEqual(ok, { ok: true, request: { type: 'launch', cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false, inheritFrom: null } });
 });
 
 test('autoSubmit is honoured only as a real boolean true', () => {
@@ -151,7 +151,7 @@ test('the server hands a valid request to onLaunch and reports its result', asyn
 
   const reply = await request(socketPath, { token: 'secret', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true });
   assert.deepEqual(reply, { ok: true, sessionId: 'abc' });
-  assert.deepEqual(seen, [{ cwd: '/tmp/proj', prompt: 'go', autoSubmit: true, inheritFrom: null }]);
+  assert.deepEqual(seen, [{ type: 'launch', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true, inheritFrom: null }]);
   assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
 
   await handle.close();
@@ -214,5 +214,45 @@ test('the server starts over a socket file left by a crash', async () => {
     socketPath, token: 'secret', onLaunch: async () => ({ ok: true }),
   });
   assert.deepEqual(await request(socketPath, { token: 'secret', cwd: '/tmp' }), { ok: true });
+  await handle.close();
+});
+
+test('a session-states request needs the token but no cwd, and an unknown type is refused', () => {
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"session-states"}', 's'),
+    { ok: true, request: { type: 'session-states' } });
+  assert.deepEqual(parseLaunchRequest('{"token":"x","type":"session-states"}', 's'),
+    { ok: false, error: 'bad token' });
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"rm-rf","cwd":"/tmp"}', 's'),
+    { ok: false, error: 'unknown request type' });
+  assert.equal(parseLaunchRequest('{"token":"s","type":"launch","cwd":"/tmp"}', 's').request.type, 'launch');
+});
+
+test('the server answers session-states from onSessionStates without launching anything', async () => {
+  const dir = tmpDir();
+  const socketPath = path.join(dir, 'launch.sock');
+  let launched = false;
+  const sessions = { abc: { waitingFor: 'input needed' }, def: { scrolledUp: true } };
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret',
+    onLaunch: async () => { launched = true; return { ok: true }; },
+    onSessionStates: () => ({ ok: true, sessions }),
+  });
+
+  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'session-states' }), { ok: true, sessions });
+  assert.equal(launched, false);
+  await handle.close();
+});
+
+test('a server started without onSessionStates says so instead of launching', async () => {
+  const dir = tmpDir();
+  const socketPath = path.join(dir, 'launch.sock');
+  let launched = false;
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret', onLaunch: async () => { launched = true; return { ok: true }; },
+  });
+
+  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'session-states' }),
+    { ok: false, error: 'session states not available' });
+  assert.equal(launched, false);
   await handle.close();
 });

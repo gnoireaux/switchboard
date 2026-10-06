@@ -572,6 +572,9 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
   if (session.messageCount) parts.push(`<span class="pane-sep">·</span><span>${session.messageCount} msgs</span>`);
   const contextLabel = contextTokensLabel(session.contextTokens);
   if (contextLabel) parts.push(`<span class="pane-sep">·</span><span>${contextLabel}</span>`);
+  // Same chips as the Sessions tab, shown by the row's state classes.
+  parts.push('<span class="session-state-chip session-waiting-chip">? waiting</span>');
+  parts.push('<span class="session-state-chip session-scrolled-chip" title="Terminal scrolled up: not showing its last line">\u2191 scrolled</span>');
   row.innerHTML = `<span class="pane-title">${escapeHtml(sessionTitle(session))}</span><span class="pane-meta">${parts.join('')}</span>`;
   // A floating button, shown on hover: dismiss a session that never started
   // (nothing to archive), otherwise archive or unarchive.
@@ -593,6 +596,7 @@ function buildSessionRow(project, session, { showTrack = true, className = 'pane
     showContextMenu(sessionMenuItems(session), { x: e.clientX, y: e.clientY });
   };
   if (hoverPreview) attachSessionHoverPreview(row, session);
+  if (typeof applySessionStateClasses === 'function') applySessionStateClasses(row, id);
   return row;
 }
 

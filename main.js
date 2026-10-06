@@ -60,6 +60,9 @@ const { INITIAL_PROMPT_FALLBACK_MS, buildInitialPromptWrites } = require('./init
 const {
   defaultLaunchPaths, ensureLaunchToken, startLaunchSocketServer,
 } = require('./launch-socket-server');
+const {
+  createSessionStates, sessionStatesFilePath, writeSessionStatesFile, removeSessionStatesFile,
+} = require('./session-states');
 
 
 
@@ -1754,6 +1757,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
             session._cliBusy = true;
             session._oscIdle = false;
             log.debug(`[OSC 0] session=${currentId} → BUSY`);
+            // Working again means the question was answered.
+            sessionStates.clearWaiting([currentId, session.realSessionId]);
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
@@ -1783,6 +1788,8 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
             session._cliBusy = true;
             session._oscIdle = false;
             log.debug(`[OSC 9;4] session=${currentId} → BUSY`);
+            // Working again means the question was answered.
+            sessionStates.clearWaiting([currentId, session.realSessionId]);
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send('cli-busy-state', currentId, true);
             }
@@ -2264,6 +2271,30 @@ const blockedAgentShownNative = new Set();
 
 const AGENT_POLL_TIMEOUT_MS = 8000;
 
+// --- Live session states (waiting on the user, terminal scrolled up) ---
+// The sidebar badges them; other sessions read them from the data dir or the
+// launch socket (see session-states.js). The file is the cheap read: a shell
+// in a hosted session already has SWITCHBOARD_DATA_DIR pointing at it.
+const sessionStatesFile = sessionStatesFilePath(defaultLaunchPaths().dir);
+let sessionStatesWriteFailureLogged = false;
+const sessionStates = createSessionStates({
+  onChange: sessions => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('session-states', sessions);
+    if (appIsQuitting) return;
+    try {
+      writeSessionStatesFile(sessionStatesFile, sessions);
+      sessionStatesWriteFailureLogged = false;
+    } catch (err) {
+      if (!sessionStatesWriteFailureLogged) log.warn(`[session-states] cannot write ${sessionStatesFile}: ${err.message}`);
+      sessionStatesWriteFailureLogged = true;
+    }
+  },
+});
+
+ipcMain.on('terminal-scrolled-up', (_event, sessionId, isScrolledUp) => {
+  sessionStates.setScrolledUp(sessionId, isScrolledUp === true);
+});
+
 function hostedSessionIds() {
   const ids = new Set();
   for (const [sessionId, session] of activeSessions) {
@@ -2337,6 +2368,9 @@ function pollBlockedAgents() {
     });
     blockedAgentReasons = reasons;
     blockedAgentWorkingSessionIds = workingSessionIds;
+    // Hosted sessions included: their one-shot OSC notice is gone once the row
+    // is opened, while this badge stays as long as the agent waits.
+    sessionStates.setWaiting(reasons);
 
     for (const notification of notifications) {
       log.info(`[agents] session=${notification.sessionId} reason="${notification.reason}" cwd=${notification.cwd || '?'}`);
@@ -2392,6 +2426,8 @@ function startBlockedAgentsPoller() {
 ipcMain.on('sidebar-ready', () => {
   blockedAgentReasons = new Map();
   blockedAgentPendingNative.clear();
+  sessionStates.forgetPublished();
+  sessionStates.resetScrolledUp();
   if (blockedAgentTimer) pollBlockedAgents();
   else startBlockedAgentsPoller();
 });
@@ -2475,6 +2511,7 @@ async function startLaunchSocket() {
     const token = ensureLaunchToken(tokenPath);
     launchSocket = await startLaunchSocketServer({
       socketPath, token, logger: log, onLaunch: handleExternalLaunchRequest,
+      onSessionStates: () => ({ ok: true, sessions: sessionStates.snapshot() }),
     });
   } catch (err) {
     // A dead entry point must not stop the app from running.
@@ -2625,6 +2662,7 @@ app.on('before-quit', () => {
     launchSocket.close();
     launchSocket = null;
   }
+  removeSessionStatesFile(sessionStatesFile);
 
   // Close filesystem watcher
   if (projectsWatcher) {

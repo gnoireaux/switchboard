@@ -581,6 +581,21 @@ function createTerminalEntry(session) {
   const fileLinkRegistration = terminal.registerLinkProvider(fileLinks);
   const linkScroll = terminal.onScroll(linkHandler.leave);
   const linkResize = terminal.onResize(linkHandler.leave);
+  // The sidebar marks a terminal the user has scrolled up in, so a session
+  // being read is not closed by mistake. Output arriving while scrolled up
+  // leaves the viewport where it is, so only scrolling and a buffer switch
+  // change this. The wheel check backs up onScroll for user scrolling.
+  const reportScrollPosition = () => {
+    if (entry.closed) return;
+    const scrolledUp = !isAtBottom(terminal);
+    if (scrolledUp === !!entry.scrolledUp) return;
+    entry.scrolledUp = scrolledUp;
+    if (typeof setTerminalScrolledUp === 'function') setTerminalScrolledUp(entry.session.sessionId, scrolledUp);
+  };
+  const reportScrollAfterWheel = () => requestAnimationFrame(reportScrollPosition);
+  const scrollPositionWatch = terminal.onScroll(reportScrollPosition);
+  const bufferSwitchWatch = terminal.buffer.onBufferChange(reportScrollPosition);
+  container.addEventListener('wheel', reportScrollAfterWheel, { passive: true });
   container.addEventListener('mouseleave', linkHandler.leave);
   container.addEventListener('wheel', linkHandler.leave, { passive: true });
   window.addEventListener('blur', linkHandler.leave);
@@ -589,6 +604,8 @@ function createTerminalEntry(session) {
     dispose() {
       fileLinks.dispose(); fileLinkRegistration.dispose(); cwdRegistration.dispose();
       linkScroll.dispose(); linkResize.dispose();
+      scrollPositionWatch.dispose(); bufferSwitchWatch.dispose();
+      container.removeEventListener('wheel', reportScrollAfterWheel);
       container.removeEventListener('mouseleave', linkHandler.leave);
       container.removeEventListener('wheel', linkHandler.leave);
       window.removeEventListener('blur', linkHandler.leave);
@@ -647,6 +664,8 @@ function destroySession(sessionId, { forgetPersisted = true, preserveHistory = f
   entry.terminal.dispose();
   entry.element.remove();
   openSessions.delete(sessionId);
+  // No terminal left to be scrolled up in.
+  if (typeof setTerminalScrolledUp === 'function') setTerminalScrolledUp(sessionId, false);
   if (typeof forgetProjectSessionState === 'function') forgetProjectSessionState(sessionId);
   const card = gridCards.get(sessionId);
   if (card) { card.remove(); gridCards.delete(sessionId); }

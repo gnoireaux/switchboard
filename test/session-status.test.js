@@ -12,6 +12,7 @@ function harness() {
   const rows = new Map();
   const listeners = {};
   const events = [];
+  const scrollReports = [];
   const context = vm.createContext({
     attentionSessions: new Set(), responseReadySessions: new Set(),
     sessionBusyState: new Map(), sessionMap: new Map(),
@@ -23,12 +24,14 @@ function harness() {
     window: { api: {
       onTerminalNotification: callback => { listeners.notice = callback; },
       onCliBusyState: callback => { listeners.busy = callback; },
+      onSessionStates: callback => { listeners.states = callback; },
+      reportTerminalScrolledUp: (id, isScrolledUp) => scrollReports.push([id, isScrolledUp]),
     } },
   });
   vm.runInContext(sidebar.slice(sidebar.indexOf('function isSessionRunning('), sidebar.indexOf('function slugId(')), context);
   vm.runInContext(projects.slice(projects.indexOf('function sessionState('), projects.indexOf('// --- Sidebar: the project list ---')), context);
   context.updateProjectStatusDots = () => {};
-  vm.runInContext(app.slice(app.indexOf('function forEachSessionItem('), app.indexOf('// Terminal themes, utils')), context);
+  vm.runInContext(app.slice(app.indexOf('function rekeySessionActivity('), app.indexOf('// Terminal themes, utils')), context);
   vm.runInContext(app.slice(app.indexOf('window.api.onTerminalNotification('), app.indexOf('// --- Single entry point for all sidebar renders ---')), context);
   const add = (id, type = 'claude') => {
     const session = { sessionId: id, type };
@@ -37,7 +40,8 @@ function harness() {
     // Both the Sessions tab and Projects pane receive the same update.
     const copies = Array.from({ length: 2 }, () => {
       const classes = new Set();
-      return { classList: {
+      const waitingChip = { title: '' };
+      return { waitingChip, querySelector: selector => selector === '.session-waiting-chip' ? waitingChip : null, classList: {
         add: name => classes.add(name), remove: name => classes.delete(name),
         contains: name => classes.has(name),
         toggle: (name, enabled) => enabled ? classes.add(name) : classes.delete(name),
@@ -46,7 +50,7 @@ function harness() {
     rows.set(id, copies);
     return session;
   };
-  return { state: context, add, rows, listeners, events };
+  return { state: context, add, rows, listeners, events, scrollReports };
 }
 
 test('marking a working session unread preserves its activity and both spinners', () => {
@@ -150,4 +154,47 @@ test('pending terminals roll up as running before the PTY poll, exited ones do n
   assert.equal(state.groupState([terminal]), 'running');
   state.pendingSessions.get('terminal').exited = true;
   assert.equal(state.groupState([terminal]), '');
+});
+
+test('a waiting session keeps its badge after being opened, until main says it stopped waiting', () => {
+  const { state, add, rows, listeners } = harness();
+  add('asks');
+  add('other');
+  listeners.states({ asks: { waitingFor: 'input needed' }, other: { scrolledUp: true } });
+  for (const row of rows.get('asks')) {
+    assert.equal(row.classList.contains('waiting-on-user'), true);
+    assert.equal(row.waitingChip.title, 'Waiting on you: input needed');
+  }
+  assert.equal(rows.get('other')[0].classList.contains('waiting-on-user'), false);
+
+  state.clearNotifications('asks');
+  assert.equal(rows.get('asks')[0].classList.contains('waiting-on-user'), true, 'opening the session is not an answer');
+
+  listeners.states({});
+  for (const row of rows.get('asks')) {
+    assert.equal(row.classList.contains('waiting-on-user'), false);
+    assert.equal(row.waitingChip.title, '');
+  }
+});
+
+test('scrolling up badges every copy of the row and tells main once per change', () => {
+  const { state, add, rows, scrollReports } = harness();
+  add('reading');
+  state.setTerminalScrolledUp('reading', true);
+  state.setTerminalScrolledUp('reading', true);
+  for (const row of rows.get('reading')) assert.equal(row.classList.contains('terminal-scrolled-up'), true);
+  state.setTerminalScrolledUp('reading', false);
+  for (const row of rows.get('reading')) assert.equal(row.classList.contains('terminal-scrolled-up'), false);
+  assert.deepEqual(scrollReports, [['reading', true], ['reading', false]]);
+});
+
+test('a re-keyed session carries its scrolled-up state to the new id', () => {
+  const { state, add, rows, scrollReports } = harness();
+  add('temp');
+  add('real');
+  state.setTerminalScrolledUp('temp', true);
+  state.rekeySessionActivity('temp', 'real');
+  assert.equal(rows.get('real')[0].classList.contains('terminal-scrolled-up'), true);
+  assert.equal(rows.get('temp')[0].classList.contains('terminal-scrolled-up'), false);
+  assert.deepEqual(scrollReports, [['temp', true], ['temp', false], ['real', true]]);
 });
