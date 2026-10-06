@@ -233,6 +233,10 @@ function rekeySessionActivity(oldId, newId) {
   }
   if (activePtyIds.delete(oldId)) activePtyIds.add(newId);
   if (sessionEventTimes.has(oldId)) { sessionEventTimes.set(newId, sessionEventTimes.get(oldId)); sessionEventTimes.delete(oldId); }
+  if (scrolledUpSessions.has(oldId)) {
+    setTerminalScrolledUp(oldId, false);
+    setTerminalScrolledUp(newId, true);
+  }
   saveSessionNotices();
 }
 
@@ -240,6 +244,40 @@ function rekeySessionActivity(oldId, newId) {
 // and in a project's pane or track card. State classes go to every copy.
 function forEachSessionItem(sessionId, fn) {
   document.querySelectorAll(`.session-item[data-session-id="${sessionId}"], .pane-session[data-session-id="${sessionId}"]`).forEach(fn);
+}
+
+// --- Live session states (main's session-states.js) ---
+// Waiting is a state, not a notice: unlike needs-attention, opening the session
+// does not clear it; the agent getting its answer does. Main learns it from
+// `claude agents` for every session, hosted ones included.
+let waitingSessions = new Map(); // sessionId → what the agent waits for
+const scrolledUpSessions = new Set(); // open terminals not showing their last line
+
+function applySessionStateClasses(item, sessionId) {
+  const reason = waitingSessions.get(sessionId);
+  item.classList.toggle('waiting-on-user', !!reason);
+  item.classList.toggle('terminal-scrolled-up', scrolledUpSessions.has(sessionId));
+  const chip = item.querySelector('.session-waiting-chip');
+  if (chip) chip.title = reason ? `Waiting on you: ${reason}` : '';
+}
+
+window.api.onSessionStates(sessions => {
+  const next = new Map();
+  for (const [id, state] of Object.entries(sessions || {})) {
+    if (state && state.waitingFor) next.set(id, state.waitingFor);
+  }
+  const touched = new Set([...waitingSessions.keys(), ...next.keys()]);
+  waitingSessions = next;
+  for (const id of touched) forEachSessionItem(id, item => applySessionStateClasses(item, id));
+});
+
+// Main keeps the scroll state too, for readers outside the app.
+function setTerminalScrolledUp(sessionId, isScrolledUp) {
+  if (!sessionId || scrolledUpSessions.has(sessionId) === isScrolledUp) return;
+  if (isScrolledUp) scrolledUpSessions.add(sessionId);
+  else scrolledUpSessions.delete(sessionId);
+  forEachSessionItem(sessionId, item => applySessionStateClasses(item, sessionId));
+  window.api.reportTerminalScrolledUp(sessionId, isScrolledUp);
 }
 
 // Central activity dispatcher

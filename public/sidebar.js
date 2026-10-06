@@ -825,7 +825,16 @@ function buildSessionItem(session) {
   timeEl.textContent = timeStr +
     (session.messageCount ? ' \u00b7 ' + session.messageCount + ' msgs' : '') +
     formatContextTokens(session.contextTokens);
-  metaEl.append(mark, timeEl);
+  // Shown by the row's waiting-on-user / terminal-scrolled-up classes, which
+  // applySessionStateClasses keeps current without rebuilding the row.
+  const waitingChip = document.createElement('span');
+  waitingChip.className = 'session-state-chip session-waiting-chip';
+  waitingChip.textContent = '? waiting';
+  const scrolledChip = document.createElement('span');
+  scrolledChip.className = 'session-state-chip session-scrolled-chip';
+  scrolledChip.textContent = '\u2191 scrolled';
+  scrolledChip.title = 'Terminal scrolled up: not showing its last line';
+  metaEl.append(mark, timeEl, waitingChip, scrolledChip);
   // Started by a scheduled task: a clock, with which one and when in its tooltip.
   if (session.scheduleId && typeof scheduleChipHtml === 'function') {
     const chip = document.createElement('span');
@@ -878,6 +887,7 @@ function buildSessionItem(session) {
   }
 
   footer.append(metaEl, actions);
+  applySessionStateClasses(item, session.sessionId);
   row.append(header, footer);
   item.appendChild(row);
 

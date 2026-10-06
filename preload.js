@@ -96,10 +96,14 @@ contextBridge.exposeInMainWorld('api', {
   closeTerminal: (id) => ipcRenderer.send('close-terminal', id),
   reportBlockedSessionRowless: (id) => ipcRenderer.send('blocked-session-rowless', id),
   reportSidebarReady: () => ipcRenderer.send('sidebar-ready'),
+  reportTerminalScrolledUp: (id, isScrolledUp) => ipcRenderer.send('terminal-scrolled-up', id, isScrolledUp),
   sendTaskInput: (projectPath, label, data) => ipcRenderer.send('task-input', projectPath, label, data),
   resizeTask: (projectPath, label, cols, rows) => ipcRenderer.send('task-resize', projectPath, label, cols, rows),
 
   // Listeners (main → renderer)
+  onSessionStates: (callback) => {
+    ipcRenderer.on('session-states', (_event, sessions) => callback(sessions));
+  },
   onQuitHold: (callback) => {
     ipcRenderer.on('quit-hold', (_event, state) => callback(state));
   },

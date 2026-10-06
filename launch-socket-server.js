@@ -74,6 +74,10 @@ function parseLaunchRequest(raw, expectedToken) {
     return { ok: false, error: 'request must be an object' };
   }
   if (!tokensMatch(parsed.token, expectedToken)) return { ok: false, error: 'bad token' };
+  // A read of live session state rather than a launch: same socket and token,
+  // since who may read which sessions wait on the user is the same question.
+  if (parsed.type === 'session-states') return { ok: true, request: { type: 'session-states' } };
+  if (parsed.type !== undefined && parsed.type !== 'launch') return { ok: false, error: 'unknown request type' };
   const cwd = parsed.cwd;
   if (typeof cwd !== 'string' || !cwd.trim()) return { ok: false, error: 'cwd is required' };
   if (!path.isAbsolute(cwd)) return { ok: false, error: 'cwd must be an absolute path' };
@@ -90,7 +94,7 @@ function parseLaunchRequest(raw, expectedToken) {
   }
   return {
     ok: true,
-    request: { cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true, inheritFrom },
+    request: { type: 'launch', cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true, inheritFrom },
   };
 }
 
@@ -113,7 +117,8 @@ function clearStaleSocket(socketPath) {
 }
 
 // onLaunch(request) -> { ok: true, ... } | { ok: false, error }, may be async.
-async function startLaunchSocketServer({ socketPath, token, onLaunch, logger = null }) {
+// onSessionStates() -> { ok: true, sessions } answers a 'session-states' request.
+async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, logger = null }) {
   await clearStaleSocket(socketPath);
 
   const server = net.createServer(socket => {
@@ -135,6 +140,14 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, logger = n
       if (!parsed.ok) {
         logger?.warn?.(`[launch-socket] rejected: ${parsed.error}`);
         return reply({ ok: false, error: parsed.error });
+      }
+      if (parsed.request.type === 'session-states') {
+        if (!onSessionStates) return reply({ ok: false, error: 'session states not available' });
+        try {
+          return reply(await onSessionStates());
+        } catch (err) {
+          return reply({ ok: false, error: err?.message || 'session states failed' });
+        }
       }
       try {
         const result = await onLaunch(parsed.request);

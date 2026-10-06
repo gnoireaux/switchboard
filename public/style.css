@@ -7188,3 +7188,21 @@ textarea.settings-input {
   border-radius: 3px;
   background: #8088ff;
 }
+
+/* Live session states (session-states.js): waiting on the user, terminal
+   scrolled up. Present in every row, shown only by the row's state class. */
+.session-state-chip {
+  display: none;
+  flex-shrink: 0;
+  margin-left: 6px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
+  font-weight: 700;
+  line-height: 14px;
+  white-space: nowrap;
+}
+.session-waiting-chip { color: #f0a050; background: rgba(240, 160, 80, 0.16); }
+.session-scrolled-chip { color: #8fb4d9; background: rgba(143, 180, 217, 0.16); }
+.waiting-on-user .session-waiting-chip,
+.terminal-scrolled-up .session-scrolled-chip { display: inline-flex; }
