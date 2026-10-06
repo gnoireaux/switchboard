@@ -887,9 +887,10 @@ function buildSessionItem(session) {
   }
 
   footer.append(metaEl, actions);
-  applySessionStateClasses(item, session.sessionId);
   row.append(header, footer);
   item.appendChild(row);
+  // After the chips are in the item: the waiting chip's tooltip names the reason.
+  applySessionStateClasses(item, session.sessionId);
 
   return item;
 }
