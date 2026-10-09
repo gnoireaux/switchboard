@@ -111,8 +111,8 @@ const { getHarness, DEFAULT_HARNESS, transcriptPath, availableHarnesses, allHarn
         harnessForFolder: getHarnessForFolder } = require('./harnesses');
 const claudeHarness = getHarness(DEFAULT_HARNESS);
 const PROJECTS_DIR = claudeHarness.sessionsRoot();
-const PLANS_DIR = path.join(os.homedir(), '.claude', 'plans');
-const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CLAUDE_DIR = require('./claude-config-dir').claudeConfigDir();
+const PLANS_DIR = path.join(CLAUDE_DIR, 'plans');
 const STATS_CACHE_PATH = path.join(CLAUDE_DIR, 'stats-cache.json');
 const MAX_BUFFER_SIZE = 256 * 1024;
 
@@ -949,7 +949,9 @@ ipcMain.handle('get-memories', () => {
   const hiddenProjects = new Set(global.hiddenProjects || []);
 
   // --- Global files ---
-  const globalFiles = scanMdFiles(CLAUDE_DIR).map(f => ({ ...f, displayPath: '~/.claude' }));
+  const home = os.homedir();
+  const claudeDirLabel = CLAUDE_DIR.startsWith(home + path.sep) ? '~' + CLAUDE_DIR.slice(home.length) : CLAUDE_DIR;
+  const globalFiles = scanMdFiles(CLAUDE_DIR).map(f => ({ ...f, displayPath: claudeDirLabel }));
 
   // --- Per-project files ---
   const projects = [];

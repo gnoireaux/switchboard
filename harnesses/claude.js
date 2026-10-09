@@ -11,11 +11,11 @@
 // for the shape every harness implements.
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { scanLines } = require('../jsonl-scan');
 const { encodeProjectPath } = require('../encode-project-path');
+const { claudeConfigDir } = require('../claude-config-dir');
 
 const id = 'claude';
 const label = 'Claude';
@@ -34,7 +34,7 @@ const groupsByProject = true;
 // --- Layout ---
 
 function sessionsRoot() {
-  return path.join(os.homedir(), '.claude', 'projects');
+  return path.join(claudeConfigDir(), 'projects');
 }
 
 /**

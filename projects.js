@@ -23,6 +23,7 @@ const crypto = require('crypto');
 const git = require('./git');
 const planParser = require('./public/plan-parser');
 const sessionConfig = require('./public/session-config');
+const { claudeConfigDir } = require('./claude-config-dir');
 
 const DEFAULT_ROOT_NAME = 'Switchboard';
 const REPOS_DIR = 'repos';
@@ -48,7 +49,7 @@ function init(ctx) {
   // and callers that do not care accept anything.
   isHarnessId = ctx.isHarnessId || (() => true);
   // Where Claude Code keeps plan-mode plans (~/.claude/plans), for adopting one.
-  plansDir = ctx.plansDir || path.join(os.homedir(), '.claude', 'plans');
+  plansDir = ctx.plansDir || path.join(claudeConfigDir(), 'plans');
   // Project templates; tests point this at a temp folder or the bundled one.
   templatesDir = ctx.templatesDir || null;
 }

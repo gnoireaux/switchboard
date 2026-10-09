@@ -6,10 +6,7 @@ const { execFileSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-
-function getConfigDir() {
-  return (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'));
-}
+const { claudeConfigDir: getConfigDir } = require('./claude-config-dir');
 
 function getKeychainServiceName() {
   const suffix = '-credentials';
