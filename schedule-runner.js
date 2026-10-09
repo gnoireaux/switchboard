@@ -4,10 +4,10 @@
 // cronMatches stays for tests and for parity with public/schedule-time.js.
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { readHead } = require('./jsonl-scan');
+const { claudeConfigDir } = require('./claude-config-dir');
 
-const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const CLAUDE_DIR = claudeConfigDir();
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 
 /** Parse YAML-like frontmatter from a markdown file (simple key: value parser). */

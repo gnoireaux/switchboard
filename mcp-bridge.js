@@ -10,10 +10,11 @@ const { WebSocketServer } = require('ws');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const net = require('net');
+const { claudeConfigDir } = require('./claude-config-dir');
 
-const IDE_DIR = path.join(os.homedir(), '.claude', 'ide');
+// The CLI looks for IDE lockfiles under its own config dir.
+const IDE_DIR = path.join(claudeConfigDir(), 'ide');
 
 // sessionId → ServerEntry
 const servers = new Map();
