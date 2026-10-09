@@ -547,3 +547,80 @@ test('a disabled CLI\'s sessions are hidden but its cached rows are kept', () =>
     fs.rmSync(codexHome, { recursive: true, force: true });
   }
 });
+
+// --- folders that vanished while the app was closed ---
+
+function recordPrunes(fake) {
+  const pruned = { cache: [], search: [] };
+  fake.db.deleteCachedFolder = folder => pruned.cache.push(folder);
+  fake.db.deleteSearchFolder = folder => pruned.search.push(folder);
+  return pruned;
+}
+
+function metaFor(...folders) {
+  return new Map(folders.map(folder => [folder, { folder, projectPath: '/tmp/' + folder, indexMtimeMs: 0 }]));
+}
+
+test('reconcile prunes a cached folder whose transcripts are gone and keeps present ones', () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-prune-'));
+  try {
+    writeSession(path.join(projectsDir, 'proj-present'), '/tmp/proj-present');
+    // proj-moved-away was indexed earlier, then moved or deleted while the app was closed.
+    const fake = makeFakeDb(metaFor('proj-present', 'proj-moved-away'));
+    const pruned = recordPrunes(fake);
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+
+    sessionCache.reconcileCacheFromFilesystem();
+
+    assert.deepEqual(pruned.cache, ['proj-moved-away']);
+    assert.deepEqual(pruned.search, ['proj-moved-away'], 'its search entries go too');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('a missing transcript root prunes nothing', () => {
+  const projectsDir = path.join(os.tmpdir(), 'switchboard-absent-root-' + process.pid);
+  const fake = makeFakeDb(metaFor('proj-a', 'proj-b'));
+  const pruned = recordPrunes(fake);
+  sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+    getMainWindow: () => null, log: console, db: fake.db });
+
+  sessionCache.reconcileCacheFromFilesystem();
+
+  assert.deepEqual(pruned.cache, [], 'an unmounted or not-yet-created root may come back');
+});
+
+test('codex date folders are pruned only while the codex home exists', () => {
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-claude-'));
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-codex-'));
+  const prevHome = process.env.CODEX_HOME;
+  try {
+    process.env.CODEX_HOME = codexHome;
+    writeRollout(path.join(codexHome, 'sessions', '2026', '08', '26'), '/tmp/codex-project');
+    const meta = () => new Map([
+      ['codex/2026/08/26', { folder: 'codex/2026/08/26', projectPath: null, indexMtimeMs: 0 }],
+      ['codex/2026/07/01', { folder: 'codex/2026/07/01', projectPath: null, indexMtimeMs: 0 }],
+    ]);
+
+    const fake = makeFakeDb(meta());
+    const pruned = recordPrunes(fake);
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+    sessionCache.reconcileCacheFromFilesystem();
+    assert.deepEqual(pruned.cache, ['codex/2026/07/01']);
+
+    process.env.CODEX_HOME = path.join(os.tmpdir(), 'switchboard-definitely-absent-' + process.pid);
+    const noHome = makeFakeDb(meta());
+    const prunedNoHome = recordPrunes(noHome);
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: noHome.db });
+    sessionCache.reconcileCacheFromFilesystem();
+    assert.deepEqual(prunedNoHome.cache, [], 'codex not installed here: keep its rows');
+  } finally {
+    if (prevHome === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = prevHome;
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+    fs.rmSync(codexHome, { recursive: true, force: true });
+  }
+});
