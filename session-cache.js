@@ -312,6 +312,29 @@ function refreshFolder(folder) {
 }
 
 /**
+ * Drop cached folders whose transcript directory no longer exists.
+ *
+ * The live watcher prunes a folder removed while the app runs. One removed or
+ * moved while it was closed would otherwise stay listed forever, because
+ * reconcile only visits folders found on disk. A missing root (unmounted volume, CLI not
+ * installed) prunes nothing: that absence may be temporary, and re-indexing
+ * everything afterwards would be costly.
+ */
+function pruneVanishedFolders(metaMap) {
+  for (const folder of metaMap.keys()) {
+    try {
+      const h = harnessForFolder(folder);
+      const root = h.folderPrefix ? h.sessionsRoot() : PROJECTS_DIR;
+      if (!fs.existsSync(root) || fs.existsSync(resolveFolderPath(folder))) continue;
+      deleteCachedFolder(folder);
+      deleteSearchFolder(folder);
+    } catch (err) {
+      console.error('Error pruning folder', folder, err);
+    }
+  }
+}
+
+/**
  * Reconcile the cache with the filesystem.
  *
  * Re-indexes only folders that are new or whose newest .jsonl is newer than what
@@ -337,6 +360,8 @@ function reconcileCacheFromFilesystem() {
       console.error('Error reconciling folder', folder, err);
     }
   }
+
+  pruneVanishedFolders(metaMap);
 
   // Some harness metadata changes without touching a transcript. This remains
   // necessary even when every folder above was skipped by the mtime gate.
