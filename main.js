@@ -36,6 +36,7 @@ const { createTerminalActivity } = require('./terminal-activity');
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell } = require('./shell-profiles');
 const { scanSchedules } = require('./schedule-runner');
+const { removeLegacyScheduleCommand } = require('./legacy-schedule-command');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
@@ -2126,6 +2127,9 @@ function startScheduleTicker() {
       const imported = projects.importLegacySchedules(scanSchedules(log));
       if (imported) log.info(`[schedule] Imported ${imported} schedule file(s) as folder schedules`);
     } catch (err) { log.error('[schedule] legacy import failed', err); }
+    try {
+      if (removeLegacyScheduleCommand()) log.info('[schedule] Removed the legacy create-switchboard-schedule command');
+    } catch (err) { log.error('[schedule] legacy command cleanup failed', err); }
     startScheduleTicker();
 
     // Re-index search if FTS table was recreated (e.g. tokenizer config change)
