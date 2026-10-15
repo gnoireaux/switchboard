@@ -18,6 +18,10 @@
 // --option key=value any other one Switchboard lets a caller set; they win over
 // what the successor inherits from the caller's launch options. An empty value
 // asks for the CLI's own default.
+//
+// --features launches nothing: it prints, one per line, the request fields the
+// running Switchboard applies ("options" = the settings above), and fails on a
+// Switchboard too old to say — one that would silently ignore them.
 
 const net = require('net');
 const fs = require('fs');
@@ -27,7 +31,7 @@ function parseArgs(argv, env = process.env) {
   const args = {
     cwd: process.cwd(), prompt: null, autoSubmit: false,
     inheritFrom: env.CLAUDE_CODE_SESSION_ID || null,
-    options: {},
+    options: {}, features: false,
   };
   const SETTING_FLAGS = { '--effort': 'effort', '--model': 'model', '--permission-mode': 'permissionMode' };
   for (let i = 0; i < argv.length; i++) {
@@ -37,6 +41,7 @@ function parseArgs(argv, env = process.env) {
     else if (arg === '--send') args.autoSubmit = true;
     else if (arg === '--inherit-from') args.inheritFrom = argv[++i] || null;
     else if (arg === '--no-inherit') args.inheritFrom = null;
+    else if (arg === '--features') args.features = true;
     else if (SETTING_FLAGS[arg]) args.options[SETTING_FLAGS[arg]] = argv[++i] ?? '';
     else if (arg === '--option') {
       const pair = argv[++i] || '';
@@ -66,7 +71,7 @@ function readStdin() {
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
-  const prompt = args.prompt !== null ? args.prompt : await readStdin();
+  const prompt = args.features ? '' : args.prompt !== null ? args.prompt : await readStdin();
   const { socketPath, tokenPath } = defaultLaunchPaths();
 
   let token;
@@ -83,9 +88,9 @@ async function main() {
     process.exit(1);
   });
   socket.on('connect', () => {
-    const payload = { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
-    if (args.inheritFrom) payload.inheritFrom = args.inheritFrom;
-    if (Object.keys(args.options).length) payload.options = args.options;
+    const payload = args.features ? { token, type: 'features' } : { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
+    if (!args.features && args.inheritFrom) payload.inheritFrom = args.inheritFrom;
+    if (!args.features && Object.keys(args.options).length) payload.options = args.options;
     socket.write(`${JSON.stringify(payload)}\n`);
   });
 
@@ -95,12 +100,16 @@ async function main() {
   socket.on('end', () => {
     let parsed;
     try { parsed = JSON.parse(reply); } catch { parsed = { ok: false, error: `unreadable reply: ${reply}` }; }
+    if (parsed.ok && args.features) {
+      process.stdout.write((parsed.features || []).map(f => `${f}\n`).join(''));
+      return;
+    }
     if (parsed.ok) {
       const filed = parsed.projectId ? ` (project ${parsed.projectId}${parsed.trackId ? `, track ${parsed.trackId}` : ''})` : '';
       process.stdout.write(`launched in ${args.cwd}${filed}\n`);
       return;
     }
-    process.stderr.write(`launch refused: ${parsed.error}\n`);
+    process.stderr.write(`${args.features ? 'features' : 'launch'} refused: ${parsed.error}\n`);
     process.exit(1);
   });
 }

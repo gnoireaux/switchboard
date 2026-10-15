@@ -77,6 +77,10 @@ function parseLaunchRequest(raw, expectedToken) {
   // A read of live session state rather than a launch: same socket and token,
   // since who may read which sessions wait on the user is the same question.
   if (parsed.type === 'session-states') return { ok: true, request: { type: 'session-states' } };
+  // What this build's launches understand, so a caller can tell an older
+  // Switchboard (which answers "unknown request type") from one that applies
+  // what it sends.
+  if (parsed.type === 'features') return { ok: true, request: { type: 'features' } };
   if (parsed.type !== undefined && parsed.type !== 'launch') return { ok: false, error: 'unknown request type' };
   const cwd = parsed.cwd;
   if (typeof cwd !== 'string' || !cwd.trim()) return { ok: false, error: 'cwd is required' };
@@ -126,6 +130,10 @@ function clearStaleSocket(socketPath) {
   });
 }
 
+// Launch request fields beyond cwd/prompt/autoSubmit/inheritFrom that this
+// build applies; answered to a 'features' request.
+const LAUNCH_FEATURES = ['options'];
+
 // onLaunch(request) -> { ok: true, ... } | { ok: false, error }, may be async.
 // onSessionStates() -> { ok: true, sessions } answers a 'session-states' request.
 async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, logger = null }) {
@@ -151,6 +159,7 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionS
         logger?.warn?.(`[launch-socket] rejected: ${parsed.error}`);
         return reply({ ok: false, error: parsed.error });
       }
+      if (parsed.request.type === 'features') return reply({ ok: true, features: LAUNCH_FEATURES });
       if (parsed.request.type === 'session-states') {
         if (!onSessionStates) return reply({ ok: false, error: 'session states not available' });
         try {
@@ -194,6 +203,7 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionS
 
 module.exports = {
   MAX_REQUEST_BYTES,
+  LAUNCH_FEATURES,
   defaultLaunchPaths,
   ensureLaunchToken,
   tokensMatch,

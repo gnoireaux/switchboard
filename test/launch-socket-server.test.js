@@ -148,6 +148,7 @@ test('the client collects requested session settings from its flags', () => {
   );
   assert.deepEqual(parseArgs(['--effort', ''], {}).options, { effort: '' }, 'an empty value asks for the CLI default');
   assert.deepEqual(parseArgs(['--effort', 'low', '--option', 'effort=max'], {}).options, { effort: 'max' }, 'the last flag wins');
+  assert.equal(parseArgs(['--features'], {}).features, true);
 });
 
 test('a socket file left by a crash is removed; a live one is left alone', async () => {
@@ -162,6 +163,17 @@ test('a socket file left by a crash is removed; a live one is left alone', async
   assert.equal(await clearStaleSocket(socketPath), false, 'a live instance keeps its socket');
   assert.equal(fs.existsSync(socketPath), true);
   await new Promise(resolve => live.close(resolve));
+});
+
+test('a features request names what launches apply, and launches nothing', async () => {
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"features"}', 's'), { ok: true, request: { type: 'features' } });
+  assert.deepEqual(parseLaunchRequest('{"token":"x","type":"features"}', 's'), { ok: false, error: 'bad token' });
+  const socketPath = path.join(tmpDir(), 'launch.sock');
+  const launched = [];
+  const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: req => { launched.push(req); return { ok: true }; } });
+  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'features' }), { ok: true, features: ['options'] });
+  assert.deepEqual(launched, []);
+  await handle.close();
 });
 
 test('the server hands a valid request to onLaunch and reports its result', async () => {
