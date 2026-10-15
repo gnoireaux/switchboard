@@ -1545,7 +1545,8 @@ window.api.onProjectsChanged((reason) => {
 // A session started from outside the app (the launch socket). The main process
 // has already checked that the folder is one Switchboard tracks, and says which
 // project and track the successor joins when its spawner was filed in one, and
-// which options it inherits when its spawner is live.
+// which options it inherits when its spawner is live, and which ones the
+// caller asked for on top.
 window.api.onLaunchSessionRequest(async (request) => {
   const options = {};
   if (request.initialPrompt) {
@@ -1559,7 +1560,9 @@ window.api.onLaunchSessionRequest(async (request) => {
   }
   recordSessionHandoff(request.handoffFrom);
   const defaults = await resolveDefaultSessionOptions(target);
-  await launchNewSession(target, { ...defaults, ...(request.inheritedOptions || {}), ...options });
+  await launchNewSession(target, {
+    ...defaults, ...(request.inheritedOptions || {}), ...(request.requestedOptions || {}), ...options,
+  });
 });
 
 // Status bar

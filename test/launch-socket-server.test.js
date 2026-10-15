@@ -85,7 +85,7 @@ test('cwd must be present and absolute', () => {
 
 test('a valid request keeps the prompt and defaults autoSubmit to off', () => {
   const ok = parseLaunchRequest('{"token":"s","cwd":"/tmp/./proj","prompt":"continue"}', 's');
-  assert.deepEqual(ok, { ok: true, request: { type: 'launch', cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false, inheritFrom: null } });
+  assert.deepEqual(ok, { ok: true, request: { type: 'launch', cwd: '/tmp/proj', prompt: 'continue', autoSubmit: false, inheritFrom: null, options: null } });
 });
 
 test('autoSubmit is honoured only as a real boolean true', () => {
@@ -115,6 +115,19 @@ test('inheritFrom passes through as a session id, and anything else is refused',
   }
 });
 
+test('options pass through as an object, and anything else is refused', () => {
+  const opts = { effort: 'xhigh', model: 'opus' };
+  assert.deepEqual(parseLaunchRequest(`{"token":"s","cwd":"/tmp","options":${JSON.stringify(opts)}}`, 's').request.options, opts);
+  assert.equal(parseLaunchRequest('{"token":"s","cwd":"/tmp","options":null}', 's').request.options, null);
+  for (const bad of ['"xhigh"', '42', '[]', 'true']) {
+    assert.deepEqual(
+      parseLaunchRequest(`{"token":"s","cwd":"/tmp","options":${bad}}`, 's'),
+      { ok: false, error: 'options must be an object' },
+      `${bad} must be refused`,
+    );
+  }
+});
+
 test('the client sends the caller\u2019s session id unless told otherwise', () => {
   const { parseArgs } = require('../scripts/launch-session');
   const env = { CLAUDE_CODE_SESSION_ID: 'caller-sid' };
@@ -123,6 +136,18 @@ test('the client sends the caller\u2019s session id unless told otherwise', () =
   assert.equal(parseArgs(['--inherit-from', 'other-sid'], env).inheritFrom, 'other-sid');
   assert.equal(parseArgs(['--no-inherit'], env).inheritFrom, null);
   assert.equal(parseArgs(['--no-inherit', '--inherit-from', 'x'], env).inheritFrom, 'x', 'the last flag wins');
+});
+
+test('the client collects requested session settings from its flags', () => {
+  const { parseArgs } = require('../scripts/launch-session');
+  assert.deepEqual(parseArgs(['--cwd', '/p'], {}).options, {}, 'no flag, no settings');
+  assert.deepEqual(
+    parseArgs(['--effort', 'xhigh', '--model', 'opus[1m]', '--permission-mode', 'auto', '--option', 'appendSystemPrompt=a=b'], {}).options,
+    { effort: 'xhigh', model: 'opus[1m]', permissionMode: 'auto', appendSystemPrompt: 'a=b' },
+    '--option splits on the first = only',
+  );
+  assert.deepEqual(parseArgs(['--effort', ''], {}).options, { effort: '' }, 'an empty value asks for the CLI default');
+  assert.deepEqual(parseArgs(['--effort', 'low', '--option', 'effort=max'], {}).options, { effort: 'max' }, 'the last flag wins');
 });
 
 test('a socket file left by a crash is removed; a live one is left alone', async () => {
@@ -151,7 +176,7 @@ test('the server hands a valid request to onLaunch and reports its result', asyn
 
   const reply = await request(socketPath, { token: 'secret', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true });
   assert.deepEqual(reply, { ok: true, sessionId: 'abc' });
-  assert.deepEqual(seen, [{ type: 'launch', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true, inheritFrom: null }]);
+  assert.deepEqual(seen, [{ type: 'launch', cwd: '/tmp/proj', prompt: 'go', autoSubmit: true, inheritFrom: null, options: null }]);
   assert.equal(fs.statSync(socketPath).mode & 0o777, 0o600);
 
   await handle.close();

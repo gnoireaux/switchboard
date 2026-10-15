@@ -92,9 +92,19 @@ function parseLaunchRequest(raw, expectedToken) {
     }
     inheritFrom = parsed.inheritFrom;
   }
+  // Session settings the caller asks for (model, effort…), on top of what the
+  // successor inherits. Only the shape is checked here; which settings an
+  // external launch may set is the main process's call, per CLI.
+  let options = null;
+  if (parsed.options !== undefined && parsed.options !== null) {
+    if (typeof parsed.options !== 'object' || Array.isArray(parsed.options)) {
+      return { ok: false, error: 'options must be an object' };
+    }
+    options = parsed.options;
+  }
   return {
     ok: true,
-    request: { type: 'launch', cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true, inheritFrom },
+    request: { type: 'launch', cwd: path.normalize(cwd), prompt, autoSubmit: parsed.autoSubmit === true, inheritFrom, options },
   };
 }
 
