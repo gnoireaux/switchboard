@@ -2,7 +2,10 @@
 // Add supported fields here once; both configuration forms use this registry.
 (function (root) {
   const PERMISSION_MODES = [
-    { value: null, label: 'Default', desc: 'Prompt for all actions' },
+    // Default passes no flag, so claude falls back to its settings'
+    // permissions.defaultMode, which need not be manual.
+    { value: null, label: 'Default', desc: "Claude's own setting" },
+    { value: 'manual', label: 'Manual', desc: 'Prompt for all actions' },
     { value: 'auto', label: 'Auto', desc: 'Classifier allows routine work, stops for risky actions' },
     { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
     { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },
@@ -132,29 +135,48 @@
     return out;
   }
 
-  // Fields a launch-socket caller may not set: the one-shot worktree flags, a
-  // command prefix (it would run whatever the caller sent), and the hidden
-  // switches no form shows.
-  const NOT_REQUESTABLE = new Set([...NOT_INHERITED, 'preLaunchCmd']);
+  // The fields a launch-socket caller may set, per CLI: the ones a session can
+  // change after its launch (/effort, /model, shift+tab), so a spawner hands
+  // its successor what it runs with now. The token is readable by any process
+  // of the user, a prompted agent included, so nothing else is open to it.
+  const REQUESTABLE = {
+    claude: new Set(['effort', 'model', 'permissionMode']),
+    codex: new Set(['codexModel', 'codexEffort']),
+  };
+
+  // How much a Claude permission mode lets run unasked. plan and dontAsk never
+  // run an unapproved tool. "Default" (null) passes no flag, so claude applies
+  // its settings' defaultMode, which may be auto: it counts as auto.
+  const MODE_LATITUDE = { manual: 0, plan: 0, dontAsk: 0, acceptEdits: 1, auto: 2, bypassPermissions: 3 };
+  function modeLatitude(options) {
+    if (options?.dangerouslySkipPermissions) return MODE_LATITUDE.bypassPermissions;
+    return MODE_LATITUDE[options?.permissionMode] ?? MODE_LATITUDE.auto;
+  }
 
   /**
    * The settings an external launch asks for on runtime, validated like a
-   * form's. A command-line caller sends text, so "true"/"false" reach a toggle
-   * as on/off and an empty permission mode as the CLI's default. Throws on a
-   * field the CLI lacks or a caller may not set.
+   * form's; an empty permission mode means the CLI's default. A requested
+   * permission mode may not be looser than inherited's, the spawner's launch
+   * options (none: at most auto). Throws on any other field, an invalid value
+   * or a looser mode.
    */
-  function requestableOptions(runtime, input) {
+  function requestableOptions(runtime, input, inherited = null) {
     if (!isObject(input)) throw new Error('Session settings must be an object');
     const fields = new Map(fieldsFor(runtime).map(f => [f.key, f]));
+    const allowed = REQUESTABLE[runtime] || new Set();
     const out = {};
     for (const [key, value] of Object.entries(input)) {
       const field = fields.get(key);
-      if (NOT_REQUESTABLE.has(key) || field?.hidden) throw new Error(`${key} cannot be set by an external launch`);
-      if (field?.type === 'boolean' && (value === 'true' || value === 'false')) out[key] = value === 'true';
-      else if (field?.type === 'permission' && value === '') out[key] = null;
-      else out[key] = value;
+      if (field && !allowed.has(key)) throw new Error(`${key} cannot be set by an external launch`);
+      out[key] = field?.type === 'permission' && value === '' ? null : value;
     }
-    return normalizeOverrides(runtime, out);
+    const clean = normalizeOverrides(runtime, out);
+    if (own(clean, 'permissionMode') && modeLatitude(clean) > modeLatitude(inherited)) {
+      const ceiling = !inherited ? 'auto, the most a launch without a live spawner may ask'
+        : `the spawner's launch mode ${inherited.dangerouslySkipPermissions ? 'bypass' : inherited.permissionMode || 'default'}`;
+      throw new Error(`permissionMode ${clean.permissionMode || 'default'} is looser than ${ceiling}`);
+    }
+    return clean;
   }
 
   const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, CLAUDE_EFFORTS, CODEX_EFFORTS, FIELDS, COMMON_FIELDS,

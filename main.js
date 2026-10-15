@@ -2492,12 +2492,13 @@ function handleExternalLaunchRequest(request) {
   const inheritedOptions = source?.session.launchOptions || null;
   if (inheritedOptions) log.info(`[launch-socket] inheriting options ${Object.keys(inheritedOptions).join(',')} from ${request.inheritFrom}`);
   // Settings the caller asks for win over inherited ones: a spawner whose
-  // effort or model changed after launch (/effort, /model) sends them itself.
-  // They are checked against the CLI the successor inherits, else Claude.
+  // effort, model or mode changed after launch (/effort, /model, shift+tab)
+  // sends them itself. They are checked against the CLI the successor
+  // inherits, else Claude, and a mode may not be looser than the inherited one.
   let requestedOptions = null;
   if (request.options) {
     try {
-      requestedOptions = sessionConfig.requestableOptions(inheritedOptions?.runtime || 'claude', request.options);
+      requestedOptions = sessionConfig.requestableOptions(inheritedOptions?.runtime || 'claude', request.options, inheritedOptions);
     } catch (err) {
       log.warn(`[launch-socket] refused options: ${err.message}`);
       return { ok: false, error: err.message };

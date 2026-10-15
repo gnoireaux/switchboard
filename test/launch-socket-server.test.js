@@ -171,7 +171,7 @@ test('a features request names what launches apply, and launches nothing', async
   const socketPath = path.join(tmpDir(), 'launch.sock');
   const launched = [];
   const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: req => { launched.push(req); return { ok: true }; } });
-  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'features' }), { ok: true, features: ['options'] });
+  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'features' }), { ok: true, features: ['options', 'manual-mode'] });
   assert.deepEqual(launched, []);
   await handle.close();
 });
@@ -292,4 +292,31 @@ test('a server started without onSessionStates says so instead of launching', as
     { ok: false, error: 'session states not available' });
   assert.equal(launched, false);
   await handle.close();
+});
+
+test('the client gives up on a Switchboard that accepts but never answers', async () => {
+  const { askSwitchboard } = require('../scripts/launch-session');
+  const socketPath = path.join(tmpDir(), 'silent.sock');
+  const held = [];
+  const silent = net.createServer(conn => held.push(conn));
+  await new Promise(resolve => silent.listen(socketPath, resolve));
+  try {
+    await assert.rejects(askSwitchboard(socketPath, { type: 'features' }, 100), /no reply from Switchboard .* within 0.1s/);
+  } finally {
+    // close() waits for open connections, and this server never ends its own.
+    for (const conn of held) conn.destroy();
+    await new Promise(resolve => silent.close(resolve));
+  }
+});
+
+test('the client returns the reply of a Switchboard that answers', async () => {
+  const { askSwitchboard } = require('../scripts/launch-session');
+  const socketPath = path.join(tmpDir(), 'launch.sock');
+  const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: () => ({ ok: true }) });
+  try {
+    assert.deepEqual(await askSwitchboard(socketPath, { token: 'secret', type: 'features' }, 1000), { ok: true, features: ['options', 'manual-mode'] });
+    await assert.rejects(askSwitchboard(path.join(tmpDir(), 'none.sock'), {}, 1000), /cannot reach Switchboard/);
+  } finally {
+    await handle.close();
+  }
 });

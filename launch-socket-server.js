@@ -130,9 +130,11 @@ function clearStaleSocket(socketPath) {
   });
 }
 
-// Launch request fields beyond cwd/prompt/autoSubmit/inheritFrom that this
-// build applies; answered to a 'features' request.
-const LAUNCH_FEATURES = ['options'];
+// What this build's launches apply beyond cwd/prompt/autoSubmit/inheritFrom;
+// answered to a 'features' request. options: the requested session settings.
+// manual-mode: permissionMode "manual" starts claude in manual; an older build
+// knows no such mode and refuses it.
+const LAUNCH_FEATURES = ['options', 'manual-mode'];
 
 // onLaunch(request) -> { ok: true, ... } | { ok: false, error }, may be async.
 // onSessionStates() -> { ok: true, sessions } answers a 'session-states' request.
