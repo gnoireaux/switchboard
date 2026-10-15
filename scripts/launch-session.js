@@ -15,7 +15,8 @@
 // sends none, and the successor is filed by its folder alone.
 //
 // --effort, --model and --permission-mode set those session settings, and
-// --option key=value any other one Switchboard lets a caller set; they win over
+// --option key=value sends any other key (Switchboard refuses every key but
+// those three, and a mode looser than the caller's launch mode); they win over
 // what the successor inherits from the caller's launch options. An empty value
 // asks for the CLI's own default.
 //

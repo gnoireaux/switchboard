@@ -146,17 +146,52 @@ test('a successor inherits its spawner’s CLI settings, never its one-shot laun
   assert.equal(SessionConfig.inheritableOptions(null, spawner), null, 'a plain terminal hands on nothing');
 });
 
-test('an external launch may set a CLI\u2019s settings, never its one-shot, command or hidden ones', () => {
-  assert.deepEqual(SessionConfig.requestableOptions('claude', { effort: 'xhigh', model: ' opus ', permissionMode: 'auto', addDirs: '/x' }),
-    { effort: 'xhigh', model: 'opus', permissionMode: 'auto', addDirs: '/x' }, 'validated and trimmed like a form');
-  assert.deepEqual(SessionConfig.requestableOptions('claude', { chrome: 'true', permissionMode: '' }),
-    { chrome: true, permissionMode: null }, 'command-line text reaches a toggle and the default permission mode');
-  for (const key of ['worktree', 'worktreeName', 'preLaunchCmd', 'dangerouslySkipPermissions', 'mcpEmulation']) {
+test('an external launch may set only effort, model and permission mode', () => {
+  assert.deepEqual(SessionConfig.requestableOptions('claude', { effort: 'xhigh', model: ' opus ', permissionMode: 'auto' }),
+    { effort: 'xhigh', model: 'opus', permissionMode: 'auto' }, 'validated and trimmed like a form');
+  assert.deepEqual(SessionConfig.requestableOptions('claude', { effort: '', permissionMode: '' }),
+    { effort: '', permissionMode: null }, 'empty asks for the CLI default');
+  assert.deepEqual(SessionConfig.requestableOptions('codex', { codexModel: 'gpt-5', codexEffort: 'high' }),
+    { codexModel: 'gpt-5', codexEffort: 'high' }, 'codex has its own model and effort');
+  const others = ['allowedTools', 'appendSystemPrompt', 'addDirs', 'chrome', 'worktree', 'worktreeName', 'preLaunchCmd',
+    'dangerouslySkipPermissions', 'mcpEmulation'];
+  for (const key of others) {
     assert.throws(() => SessionConfig.requestableOptions('claude', { [key]: 'x' }), /cannot be set by an external launch/, key);
+  }
+  for (const key of ['codexSandbox', 'codexApproval', 'dangerouslySkipPermissions']) {
+    assert.throws(() => SessionConfig.requestableOptions('codex', { [key]: 'x' }), /cannot be set by an external launch/, key);
   }
   assert.throws(() => SessionConfig.requestableOptions('claude', { effort: 'ultra' }), /Invalid Effort/, 'choices still checked');
   assert.throws(() => SessionConfig.requestableOptions('claude', { codexModel: 'gpt' }), /Unsupported/, 'another CLI\u2019s field');
   assert.throws(() => SessionConfig.requestableOptions('claude', 'xhigh'), /must be an object/);
+});
+
+test('a requested permission mode is never looser than the spawner\u2019s launch mode', () => {
+  const ask = (permissionMode, inherited) => SessionConfig.requestableOptions('claude', { permissionMode }, inherited);
+  // A spawner launched in acceptEdits
+  const acceptEdits = { runtime: 'claude', permissionMode: 'acceptEdits' };
+  // Its own mode and stricter ones pass
+  for (const mode of ['acceptEdits', 'manual', 'plan', 'dontAsk']) assert.equal(ask(mode, acceptEdits).permissionMode, mode, mode);
+  // Looser ones are refused, the CLI default counting as auto
+  for (const mode of ['auto', 'bypassPermissions', '']) {
+    assert.throws(() => ask(mode, acceptEdits), /is looser than the spawner's launch mode acceptEdits/, mode || 'default');
+  }
+
+  // A spawner launched in the CLI default
+  const unset = { runtime: 'claude', permissionMode: null };
+  // Everything up to auto passes, bypass does not
+  assert.equal(ask('auto', unset).permissionMode, 'auto');
+  assert.equal(ask('', unset).permissionMode, null);
+  assert.throws(() => ask('bypassPermissions', unset), /looser than the spawner's launch mode default/);
+
+  // A spawner launched with permission checks skipped
+  // Any mode passes
+  assert.equal(ask('bypassPermissions', { runtime: 'claude', dangerouslySkipPermissions: true }).permissionMode, 'bypassPermissions');
+
+  // No live spawner to inherit from
+  // The ceiling is auto
+  assert.equal(ask('auto', null).permissionMode, 'auto');
+  assert.throws(() => ask('bypassPermissions', null), /looser than auto, the most a launch without a live spawner may ask/);
 });
 
 test('manual is a permission mode of its own, apart from the CLI default', () => {
