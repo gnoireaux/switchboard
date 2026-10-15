@@ -132,8 +132,33 @@
     return out;
   }
 
+  // Fields a launch-socket caller may not set: the one-shot worktree flags, a
+  // command prefix (it would run whatever the caller sent), and the hidden
+  // switches no form shows.
+  const NOT_REQUESTABLE = new Set([...NOT_INHERITED, 'preLaunchCmd']);
+
+  /**
+   * The settings an external launch asks for on runtime, validated like a
+   * form's. A command-line caller sends text, so "true"/"false" reach a toggle
+   * as on/off and an empty permission mode as the CLI's default. Throws on a
+   * field the CLI lacks or a caller may not set.
+   */
+  function requestableOptions(runtime, input) {
+    if (!isObject(input)) throw new Error('Session settings must be an object');
+    const fields = new Map(fieldsFor(runtime).map(f => [f.key, f]));
+    const out = {};
+    for (const [key, value] of Object.entries(input)) {
+      const field = fields.get(key);
+      if (NOT_REQUESTABLE.has(key) || field?.hidden) throw new Error(`${key} cannot be set by an external launch`);
+      if (field?.type === 'boolean' && (value === 'true' || value === 'false')) out[key] = value === 'true';
+      else if (field?.type === 'permission' && value === '') out[key] = null;
+      else out[key] = value;
+    }
+    return normalizeOverrides(runtime, out);
+  }
+
   const api = { PERMISSION_MODES, CODEX_SANDBOX_MODES, CODEX_APPROVAL_POLICIES, CLAUDE_EFFORTS, CODEX_EFFORTS, FIELDS, COMMON_FIELDS,
-    fieldsFor, fieldsBehindMore, normalizeOverrides, normalizeByCli, resolveOptions, own, inheritableOptions };
+    fieldsFor, fieldsBehindMore, normalizeOverrides, normalizeByCli, resolveOptions, own, inheritableOptions, requestableOptions };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SessionConfig = api;
 })(typeof window !== 'undefined' ? window : globalThis);

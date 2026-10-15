@@ -2490,12 +2490,26 @@ function handleExternalLaunchRequest(request) {
   const source = request.inheritFrom ? liveLaunchSource(request.inheritFrom) : null;
   const inheritedOptions = source?.session.launchOptions || null;
   if (inheritedOptions) log.info(`[launch-socket] inheriting options ${Object.keys(inheritedOptions).join(',')} from ${request.inheritFrom}`);
+  // Settings the caller asks for win over inherited ones: a spawner whose
+  // effort or model changed after launch (/effort, /model) sends them itself.
+  // They are checked against the CLI the successor inherits, else Claude.
+  let requestedOptions = null;
+  if (request.options) {
+    try {
+      requestedOptions = sessionConfig.requestableOptions(inheritedOptions?.runtime || 'claude', request.options);
+    } catch (err) {
+      log.warn(`[launch-socket] refused options: ${err.message}`);
+      return { ok: false, error: err.message };
+    }
+    log.info(`[launch-socket] requested options ${Object.keys(requestedOptions).join(',')}`);
+  }
   mainWindow.webContents.send('launch-session-request', {
     projectPath: request.cwd,
     projectId: placement?.projectId || null,
     trackId: placement?.trackId || null,
     handoffFrom: source ? request.inheritFrom : null,
     inheritedOptions,
+    requestedOptions,
     initialPrompt: request.prompt,
     initialPromptAutoSubmit: request.autoSubmit,
   });

@@ -13,6 +13,11 @@
 // session id (CLAUDE_CODE_SESSION_ID, set by Claude Code in its tool shells) is
 // sent as inheritFrom. --inherit-from <id> names another session; --no-inherit
 // sends none, and the successor is filed by its folder alone.
+//
+// --effort, --model and --permission-mode set those session settings, and
+// --option key=value any other one Switchboard lets a caller set; they win over
+// what the successor inherits from the caller's launch options. An empty value
+// asks for the CLI's own default.
 
 const net = require('net');
 const fs = require('fs');
@@ -22,7 +27,9 @@ function parseArgs(argv, env = process.env) {
   const args = {
     cwd: process.cwd(), prompt: null, autoSubmit: false,
     inheritFrom: env.CLAUDE_CODE_SESSION_ID || null,
+    options: {},
   };
+  const SETTING_FLAGS = { '--effort': 'effort', '--model': 'model', '--permission-mode': 'permissionMode' };
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === '--cwd') args.cwd = argv[++i];
@@ -30,7 +37,16 @@ function parseArgs(argv, env = process.env) {
     else if (arg === '--send') args.autoSubmit = true;
     else if (arg === '--inherit-from') args.inheritFrom = argv[++i] || null;
     else if (arg === '--no-inherit') args.inheritFrom = null;
-    else {
+    else if (SETTING_FLAGS[arg]) args.options[SETTING_FLAGS[arg]] = argv[++i] ?? '';
+    else if (arg === '--option') {
+      const pair = argv[++i] || '';
+      const eq = pair.indexOf('=');
+      if (eq < 1) {
+        process.stderr.write(`--option needs key=value, got: ${pair}\n`);
+        process.exit(2);
+      }
+      args.options[pair.slice(0, eq)] = pair.slice(eq + 1);
+    } else {
       process.stderr.write(`unknown argument: ${arg}\n`);
       process.exit(2);
     }
@@ -69,6 +85,7 @@ async function main() {
   socket.on('connect', () => {
     const payload = { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
     if (args.inheritFrom) payload.inheritFrom = args.inheritFrom;
+    if (Object.keys(args.options).length) payload.options = args.options;
     socket.write(`${JSON.stringify(payload)}\n`);
   });
 

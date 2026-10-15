@@ -145,3 +145,16 @@ test('a successor inherits its spawner’s CLI settings, never its one-shot laun
     'a session started with no options still hands on its CLI');
   assert.equal(SessionConfig.inheritableOptions(null, spawner), null, 'a plain terminal hands on nothing');
 });
+
+test('an external launch may set a CLI\u2019s settings, never its one-shot, command or hidden ones', () => {
+  assert.deepEqual(SessionConfig.requestableOptions('claude', { effort: 'xhigh', model: ' opus ', permissionMode: 'auto', addDirs: '/x' }),
+    { effort: 'xhigh', model: 'opus', permissionMode: 'auto', addDirs: '/x' }, 'validated and trimmed like a form');
+  assert.deepEqual(SessionConfig.requestableOptions('claude', { chrome: 'true', permissionMode: '' }),
+    { chrome: true, permissionMode: null }, 'command-line text reaches a toggle and the default permission mode');
+  for (const key of ['worktree', 'worktreeName', 'preLaunchCmd', 'dangerouslySkipPermissions', 'mcpEmulation']) {
+    assert.throws(() => SessionConfig.requestableOptions('claude', { [key]: 'x' }), /cannot be set by an external launch/, key);
+  }
+  assert.throws(() => SessionConfig.requestableOptions('claude', { effort: 'ultra' }), /Invalid Effort/, 'choices still checked');
+  assert.throws(() => SessionConfig.requestableOptions('claude', { codexModel: 'gpt' }), /Unsupported/, 'another CLI\u2019s field');
+  assert.throws(() => SessionConfig.requestableOptions('claude', 'xhigh'), /must be an object/);
+});
