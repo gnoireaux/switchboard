@@ -6959,7 +6959,11 @@ textarea.settings-input {
 .np-ask-q { font-size: 12px; color: #b0b0c4; line-height: 1.45; }
 .np-ask-opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .np-ask-opt { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.np-ask-opt .ws-btn { justify-content: center; height: 28px; font-size: 12px; }
+.np-ask-opt .ws-btn { justify-content: center; height: 28px; font-size: 12px; min-width: 0; }
+.np-ask-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.np-ask-q .mono { word-break: break-all; }
+/* A folder of worktrees can hold dozens of checkouts. */
+.np-ask-repos { max-height: 240px; overflow-y: auto; padding-right: 2px; }
 .np-ask-btn--wt { color: #a6abff; border-color: rgba(120,130,255,0.4); background: rgba(120,130,255,0.12); }
 .np-ask-btn--wt:hover { background: rgba(120,130,255,0.2); }
 .np-branch-line { font-size: 11.5px; color: #6a6a80; margin-top: 8px; line-height: 1.5; }

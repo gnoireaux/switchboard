@@ -607,6 +607,7 @@ ipcMain.handle('get-project-git-status', guarded((id, opts) => projects.folderGi
 ipcMain.handle('get-project-git-info', guarded((id) => projects.projectGitInfo(id)));
 ipcMain.handle('get-project-git-diff', guarded((id, folderPath, filePath) => projects.projectGitDiff(id, folderPath, filePath)));
 ipcMain.handle('get-folder-git-status', guarded((folderPath) => projects.folderGitInfo(String(folderPath || ''))));
+ipcMain.handle('inspect-project-folder', guarded((folderPath) => projects.inspectFolder(String(folderPath || ''))));
 // The .env files a folder has, and the ones the dialog ticks by default,
 // so a new worktree can be offered its repository's local environment.
 ipcMain.handle('list-env-files', guarded((folderPath) => ({
