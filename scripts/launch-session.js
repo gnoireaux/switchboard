@@ -82,38 +82,54 @@ async function main() {
     process.exit(1);
   }
 
-  const socket = net.connect(socketPath);
-  socket.on('error', err => {
-    process.stderr.write(`cannot reach Switchboard on ${socketPath}: ${err.message}\n`);
-    process.exit(1);
-  });
-  socket.on('connect', () => {
-    const payload = args.features ? { token, type: 'features' } : { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
-    if (!args.features && args.inheritFrom) payload.inheritFrom = args.inheritFrom;
-    if (!args.features && Object.keys(args.options).length) payload.options = args.options;
-    socket.write(`${JSON.stringify(payload)}\n`);
-  });
+  const payload = args.features ? { token, type: 'features' } : { token, cwd: args.cwd, prompt, autoSubmit: args.autoSubmit };
+  if (!args.features && args.inheritFrom) payload.inheritFrom = args.inheritFrom;
+  if (!args.features && Object.keys(args.options).length) payload.options = args.options;
 
-  let reply = '';
-  socket.setEncoding('utf8');
-  socket.on('data', chunk => { reply += chunk; });
-  socket.on('end', () => {
-    let parsed;
-    try { parsed = JSON.parse(reply); } catch { parsed = { ok: false, error: `unreadable reply: ${reply}` }; }
-    if (parsed.ok && args.features) {
-      process.stdout.write((parsed.features || []).map(f => `${f}\n`).join(''));
-      return;
-    }
-    if (parsed.ok) {
-      const filed = parsed.projectId ? ` (project ${parsed.projectId}${parsed.trackId ? `, track ${parsed.trackId}` : ''})` : '';
-      process.stdout.write(`launched in ${args.cwd}${filed}\n`);
-      return;
-    }
-    process.stderr.write(`${args.features ? 'features' : 'launch'} refused: ${parsed.error}\n`);
+  let parsed;
+  try {
+    parsed = await askSwitchboard(socketPath, payload);
+  } catch (err) {
+    process.stderr.write(`${err.message}\n`);
     process.exit(1);
+  }
+  if (parsed.ok && args.features) {
+    process.stdout.write((parsed.features || []).map(f => `${f}\n`).join(''));
+    return;
+  }
+  if (parsed.ok) {
+    const filed = parsed.projectId ? ` (project ${parsed.projectId}${parsed.trackId ? `, track ${parsed.trackId}` : ''})` : '';
+    process.stdout.write(`launched in ${args.cwd}${filed}\n`);
+    return;
+  }
+  process.stderr.write(`${args.features ? 'features' : 'launch'} refused: ${parsed.error}\n`);
+  process.exit(1);
+}
+
+// A Switchboard whose main process is stuck still accepts the connection, and
+// a caller chaining into its successor would wait on it forever.
+const REPLY_TIMEOUT_MS = 10000;
+
+// Sends one request and resolves with Switchboard's parsed reply; rejects when
+// the socket is unreachable or no reply comes within timeoutMs.
+function askSwitchboard(socketPath, payload, timeoutMs = REPLY_TIMEOUT_MS) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(socketPath);
+    socket.setTimeout(timeoutMs, () => {
+      socket.destroy();
+      reject(new Error(`no reply from Switchboard on ${socketPath} within ${timeoutMs / 1000}s`));
+    });
+    socket.on('error', err => reject(new Error(`cannot reach Switchboard on ${socketPath}: ${err.message}`)));
+    socket.on('connect', () => socket.write(`${JSON.stringify(payload)}\n`));
+    let reply = '';
+    socket.setEncoding('utf8');
+    socket.on('data', chunk => { reply += chunk; });
+    socket.on('end', () => {
+      try { resolve(JSON.parse(reply)); } catch { resolve({ ok: false, error: `unreadable reply: ${reply}` }); }
+    });
   });
 }
 
 if (require.main === module) main();
 
-module.exports = { parseArgs };
+module.exports = { parseArgs, askSwitchboard };

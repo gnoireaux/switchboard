@@ -366,3 +366,12 @@ test('the folder-trust question is spotted however the TUI spaces it', () => {
   assert.equal(claude.showsStartupQuestion('\x1b]0;✳ Claude Code\x07❯ Try "edit main.js to..."'), false);
   assert.equal(claude.showsStartupQuestion(''), false);
 });
+
+test('manual is passed as a flag; the default mode passes none', () => {
+  // No flag leaves claude on its settings' permissions.defaultMode, which may
+  // be auto: a session asked to run manual must say so.
+  const manual = claude.buildLaunchArgs({ sessionId: 'a', isNew: true, options: { permissionMode: 'manual' } });
+  assert.deepEqual(manual.slice(manual.indexOf('--permission-mode'), manual.indexOf('--permission-mode') + 2), ['--permission-mode', 'manual']);
+  const unset = claude.buildLaunchArgs({ sessionId: 'a', isNew: true, options: { permissionMode: null } });
+  assert.ok(!unset.includes('--permission-mode'));
+});

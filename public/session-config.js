@@ -2,7 +2,10 @@
 // Add supported fields here once; both configuration forms use this registry.
 (function (root) {
   const PERMISSION_MODES = [
-    { value: null, label: 'Default', desc: 'Prompt for all actions' },
+    // Default passes no flag, so claude falls back to its settings'
+    // permissions.defaultMode, which need not be manual.
+    { value: null, label: 'Default', desc: "Claude's own setting" },
+    { value: 'manual', label: 'Manual', desc: 'Prompt for all actions' },
     { value: 'auto', label: 'Auto', desc: 'Classifier allows routine work, stops for risky actions' },
     { value: 'acceptEdits', label: 'Accept Edits', desc: 'Auto-accept file edits, prompt for others' },
     { value: 'plan', label: 'Plan Mode', desc: 'Read-only exploration, no writes' },

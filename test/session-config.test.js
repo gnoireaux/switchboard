@@ -158,3 +158,8 @@ test('an external launch may set a CLI\u2019s settings, never its one-shot, comm
   assert.throws(() => SessionConfig.requestableOptions('claude', { codexModel: 'gpt' }), /Unsupported/, 'another CLI\u2019s field');
   assert.throws(() => SessionConfig.requestableOptions('claude', 'xhigh'), /must be an object/);
 });
+
+test('manual is a permission mode of its own, apart from the CLI default', () => {
+  assert.deepEqual(SessionConfig.normalizeOverrides('claude', { permissionMode: 'manual' }), { permissionMode: 'manual' });
+  assert.deepEqual(SessionConfig.normalizeOverrides('claude', { permissionMode: null }), { permissionMode: null });
+});
