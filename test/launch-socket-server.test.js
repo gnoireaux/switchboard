@@ -7,7 +7,7 @@ const path = require('path');
 
 const {
   defaultLaunchPaths, ensureLaunchToken, tokensMatch, parseLaunchRequest,
-  clearStaleSocket, startLaunchSocketServer,
+  clearStaleSocket, startLaunchSocketServer, PROJECT_OPS,
 } = require('../launch-socket-server');
 
 function tmpDir() {
@@ -171,7 +171,9 @@ test('a features request names what launches apply, and launches nothing', async
   const socketPath = path.join(tmpDir(), 'launch.sock');
   const launched = [];
   const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: req => { launched.push(req); return { ok: true }; } });
-  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'features' }), { ok: true, features: ['options', 'manual-mode'] });
+  assert.deepEqual(await request(socketPath, { token: 'secret', type: 'features' }), {
+    ok: true, features: ['options', 'manual-mode', 'project-ops'], projectOps: PROJECT_OPS,
+  });
   assert.deepEqual(launched, []);
   await handle.close();
 });
@@ -314,9 +316,126 @@ test('the client returns the reply of a Switchboard that answers', async () => {
   const socketPath = path.join(tmpDir(), 'launch.sock');
   const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: () => ({ ok: true }) });
   try {
-    assert.deepEqual(await askSwitchboard(socketPath, { token: 'secret', type: 'features' }, 1000), { ok: true, features: ['options', 'manual-mode'] });
+    assert.deepEqual((await askSwitchboard(socketPath, { token: 'secret', type: 'features' }, 1000)).features, ['options', 'manual-mode', 'project-ops']);
     await assert.rejects(askSwitchboard(path.join(tmpDir(), 'none.sock'), {}, 1000), /cannot reach Switchboard/);
   } finally {
     await handle.close();
+  }
+});
+
+test('a project-op request names a known op and passes its args as an object', () => {
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"project-op","op":"project.update","args":{"projectId":"p","name":"N"}}', 's'),
+    { ok: true, request: { type: 'project-op', op: 'project.update', args: { projectId: 'p', name: 'N' } } });
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"project-op","op":"projects"}', 's'),
+    { ok: true, request: { type: 'project-op', op: 'projects', args: {} } }, 'missing args are an empty object');
+  assert.deepEqual(parseLaunchRequest('{"token":"x","type":"project-op","op":"projects"}', 's'), { ok: false, error: 'bad token' });
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"project-op","op":"project.delete","args":{}}', 's'),
+    { ok: false, error: 'unknown project op: project.delete' });
+  assert.deepEqual(parseLaunchRequest('{"token":"s","type":"project-op","op":"projects","args":[1]}', 's'),
+    { ok: false, error: 'args must be an object' });
+});
+
+test('no project op deletes anything', () => {
+  assert.deepEqual(PROJECT_OPS.filter(op => /delete|remove/i.test(op)), []);
+});
+
+test('the server hands a project op to onProjectOp, never to onLaunch, and reports a refusal as not ok', async () => {
+  const socketPath = path.join(tmpDir(), 'launch.sock');
+  const calls = [];
+  let launched = false;
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret',
+    onLaunch: () => { launched = true; return { ok: true }; },
+    onProjectOp: async (op, args) => {
+      calls.push([op, args]);
+      return args.projectId === 'gone' ? { error: 'Project not found' } : { project: { id: args.projectId } };
+    },
+  });
+  try {
+    assert.deepEqual(await request(socketPath, { token: 'secret', type: 'project-op', op: 'project.update', args: { projectId: 'p1', name: 'N' } }),
+      { ok: true, project: { id: 'p1' } });
+    assert.deepEqual(await request(socketPath, { token: 'secret', type: 'project-op', op: 'project.update', args: { projectId: 'gone' } }),
+      { ok: false, error: 'Project not found' });
+    assert.deepEqual(calls, [['project.update', { projectId: 'p1', name: 'N' }], ['project.update', { projectId: 'gone' }]]);
+    assert.equal(launched, false);
+  } finally {
+    await handle.close();
+  }
+});
+
+test('a project op that throws is reported, and the server keeps answering', async () => {
+  const socketPath = path.join(tmpDir(), 'launch.sock');
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret', onLaunch: () => ({ ok: true }),
+    onProjectOp: () => { throw new Error('db locked'); },
+  });
+  try {
+    assert.deepEqual(await request(socketPath, { token: 'secret', type: 'project-op', op: 'projects' }), { ok: false, error: 'db locked' });
+    assert.equal((await request(socketPath, { token: 'secret', type: 'features' })).ok, true);
+  } finally {
+    await handle.close();
+  }
+});
+
+test('a server started without onProjectOp says so', async () => {
+  const socketPath = path.join(tmpDir(), 'launch.sock');
+  const handle = await startLaunchSocketServer({ socketPath, token: 'secret', onLaunch: () => ({ ok: true }) });
+  try {
+    assert.deepEqual(await request(socketPath, { token: 'secret', type: 'project-op', op: 'projects' }),
+      { ok: false, error: 'project ops not available' });
+  } finally {
+    await handle.close();
+  }
+});
+
+// Runs scripts/project-op.js against the instance whose data dir is dataDir.
+function runProjectOpClient(dataDir, argv) {
+  const { execFile } = require('child_process');
+  return new Promise(resolve => {
+    execFile(process.execPath, [path.join(__dirname, '..', 'scripts', 'project-op.js'), ...argv],
+      { env: { ...process.env, SWITCHBOARD_DATA_DIR: dataDir } },
+      (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
+  });
+}
+
+test('the project-op client prints the reply of a Switchboard that applies the op', async () => {
+  const dataDir = tmpDir();
+  const { socketPath, tokenPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  const token = ensureLaunchToken(tokenPath);
+  const handle = await startLaunchSocketServer({
+    socketPath, token, onLaunch: () => ({ ok: true }),
+    onProjectOp: (op, args) => ({ op, args }),
+  });
+  try {
+    const done = await runProjectOpClient(dataDir, ['track.create', '{"projectId":"p","name":"T"}']);
+    assert.equal(done.code, 0, done.stderr);
+    assert.deepEqual(JSON.parse(done.stdout), { ok: true, op: 'track.create', args: { projectId: 'p', name: 'T' } });
+    const refused = await runProjectOpClient(dataDir, ['project.delete', '{}']);
+    assert.equal(refused.code, 1);
+    assert.match(refused.stderr, /unknown project op: project\.delete/);
+    const badArgs = await runProjectOpClient(dataDir, ['projects', '[1]']);
+    assert.equal(badArgs.code, 2);
+  } finally {
+    await handle.close();
+  }
+});
+
+test('the project-op client exits 3 on a Switchboard that predates project ops', async () => {
+  const dataDir = tmpDir();
+  const { socketPath, tokenPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  ensureLaunchToken(tokenPath);
+  const held = [];
+  const old = net.createServer(conn => {
+    held.push(conn);
+    conn.end(`${JSON.stringify({ ok: false, error: 'unknown request type' })}\n`);
+  });
+  await new Promise(resolve => old.listen(socketPath, resolve));
+  try {
+    const result = await runProjectOpClient(dataDir, ['projects']);
+    assert.equal(result.code, 3);
+    assert.match(result.stderr, /predates project ops/);
+  } finally {
+    for (const conn of held) conn.destroy();
+    await new Promise(resolve => old.close(resolve));
   }
 });
