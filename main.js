@@ -20,6 +20,21 @@ if (process.env.SWITCHBOARD_DATA_DIR) {
   app.setPath('userData', path.resolve(process.env.SWITCHBOARD_DATA_DIR, 'electron'));
 }
 
+// SWITCHBOARD_REMOTE_DEBUGGING_PORT opens the Chrome DevTools port on every
+// launch, Dock included, so a running instance can be inspected without a
+// restart that would end its sessions. Off unless set: the port has no
+// authentication, and whoever reaches it can run any code in the window.
+const remoteDebuggingPort = process.env.SWITCHBOARD_REMOTE_DEBUGGING_PORT;
+if (remoteDebuggingPort) {
+  const port = Number(remoteDebuggingPort);
+  if (Number.isInteger(port) && port >= 1024 && port <= 65535) {
+    app.commandLine.appendSwitch('remote-debugging-port', String(port));
+    log.info(`[startup] remote debugging on 127.0.0.1:${port}`);
+  } else {
+    log.warn(`[startup] ignoring SWITCHBOARD_REMOTE_DEBUGGING_PORT=${remoteDebuggingPort}: not a port in 1024-65535`);
+  }
+}
+
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
@@ -555,7 +570,8 @@ ipcMain.handle('update-project', guarded((id, patch) => projects.updateProject(i
 ipcMain.handle('delete-project', guarded((id) => projects.deleteProject(id)));
 ipcMain.handle('attach-project-folder', guarded((id, spec) => projects.attachFolder(id, spec || {})));
 ipcMain.handle('detach-project-folder', guarded((id, folderPath, opts) => projects.detachFolder(id, folderPath, opts || {})));
-ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId) => {
+ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId) => assignSessionToProject(sessionId, projectId, trackId)));
+function assignSessionToProject(sessionId, projectId, trackId) {
   const cleanProjectId = projectId || null;
   const cleanTrackId = trackId || null;
   const result = projects.assignSession(sessionId, cleanProjectId, cleanTrackId);
@@ -570,7 +586,7 @@ ipcMain.handle('set-session-assignment', guarded((sessionId, projectId, trackId)
     }
   }
   return result;
-}));
+}
 // Scheduled tasks. The tick that fires them is startScheduleTicker below.
 ipcMain.handle('list-schedules', guarded(() => projects.listSchedules()));
 ipcMain.handle('create-schedule', guarded((spec) => projects.createSchedule(spec || {})));
@@ -2523,6 +2539,44 @@ function handleExternalLaunchRequest(request) {
     : { ok: true };
 }
 
+// Only the fields named here reach projects.js, so an op can do no more than
+// the Projects tab's own form for it.
+function pickFields(source, keys) {
+  const picked = {};
+  for (const key of keys) if (source[key] !== undefined) picked[key] = source[key];
+  return picked;
+}
+
+// The project edits an external caller may make (launch-socket-server.js
+// PROJECT_OPS). Each runs the Projects tab's own code, so the brief is
+// rewritten and the renderer refreshes as after a click. The token is the
+// trust gate: whoever holds it can already launch sessions as the user, and
+// these ops create and file things but never delete them or a worktree.
+async function handleProjectOpRequest(op, args) {
+  switch (op) {
+    case 'projects':
+      if (!isCachePopulated() || !isSearchIndexPopulated()) return { ok: false, error: 'Switchboard is still indexing sessions' };
+      return projects.buildProjectTree(args.showArchived === true);
+    case 'project.create':
+      return projects.createProject(pickFields(args, ['name', 'folders', 'template', 'sharedBranch', 'branchName']));
+    case 'project.update':
+      return projects.updateProject(args.projectId, pickFields(args, ['name', 'status', 'defaultCwd']));
+    case 'project.attachFolder':
+      return projects.attachFolder(args.projectId, pickFields(args, ['path', 'mode', 'branch', 'copyEnv', 'name']));
+    case 'project.detachFolder':
+      // Rows only: the folder, and a worktree checkout, stay on disk.
+      return projects.detachFolder(args.projectId, args.path, {});
+    case 'track.create':
+      return projects.createTrack(args.projectId, pickFields(args, ['name', 'cwd', 'cli']));
+    case 'track.update':
+      return projects.updateTrack(args.trackId, pickFields(args, ['name', 'cwd', 'cli', 'status', 'sortOrder']));
+    case 'session.assign':
+      return assignSessionToProject(args.sessionId, args.projectId, args.trackId);
+    default:
+      return { ok: false, error: `unknown project op: ${op}` };
+  }
+}
+
 async function startLaunchSocket() {
   const { socketPath, tokenPath } = defaultLaunchPaths();
   try {
@@ -2530,6 +2584,7 @@ async function startLaunchSocket() {
     launchSocket = await startLaunchSocketServer({
       socketPath, token, logger: log, onLaunch: handleExternalLaunchRequest,
       onSessionStates: () => ({ ok: true, sessions: sessionStates.snapshot() }),
+      onProjectOp: handleProjectOpRequest,
     });
   } catch (err) {
     // A dead entry point must not stop the app from running.

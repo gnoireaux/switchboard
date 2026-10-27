@@ -8,6 +8,10 @@
 //
 // The server never starts a session itself. It validates a request and hands it
 // to onLaunch; the human still sees the prompt in a real terminal.
+//
+// It also takes the project edits the Projects tab makes (create a project,
+// attach a folder, rename, file a session…), so a Claude session can reorganise
+// projects in the running app instead of editing its database behind its back.
 
 const net = require('net');
 const fs = require('fs');
@@ -81,6 +85,7 @@ function parseLaunchRequest(raw, expectedToken) {
   // Switchboard (which answers "unknown request type") from one that applies
   // what it sends.
   if (parsed.type === 'features') return { ok: true, request: { type: 'features' } };
+  if (parsed.type === 'project-op') return parseProjectOp(parsed);
   if (parsed.type !== undefined && parsed.type !== 'launch') return { ok: false, error: 'unknown request type' };
   const cwd = parsed.cwd;
   if (typeof cwd !== 'string' || !cwd.trim()) return { ok: false, error: 'cwd is required' };
@@ -112,6 +117,21 @@ function parseLaunchRequest(raw, expectedToken) {
   };
 }
 
+// The project edits a caller may make, each running the same code as the
+// Projects tab. None deletes anything: removing a project, a track or a
+// session stays with the human.
+const PROJECT_OPS = [
+  'projects', 'project.create', 'project.update', 'project.attachFolder', 'project.detachFolder',
+  'track.create', 'track.update', 'session.assign',
+];
+
+function parseProjectOp(parsed) {
+  if (!PROJECT_OPS.includes(parsed.op)) return { ok: false, error: `unknown project op: ${parsed.op}` };
+  const args = parsed.args === undefined || parsed.args === null ? {} : parsed.args;
+  if (typeof args !== 'object' || Array.isArray(args)) return { ok: false, error: 'args must be an object' };
+  return { ok: true, request: { type: 'project-op', op: parsed.op, args } };
+}
+
 // Removes a socket file left behind by a crash. A socket nobody is listening on
 // refuses connections; one that answers belongs to a live instance and is left
 // alone, so a second Switchboard fails to listen instead of stealing the path.
@@ -133,12 +153,15 @@ function clearStaleSocket(socketPath) {
 // What this build's launches apply beyond cwd/prompt/autoSubmit/inheritFrom;
 // answered to a 'features' request. options: the requested session settings.
 // manual-mode: permissionMode "manual" starts claude in manual; an older build
-// knows no such mode and refuses it.
-const LAUNCH_FEATURES = ['options', 'manual-mode'];
+// knows no such mode and refuses it. project-ops: 'project-op' requests, the
+// ops listed in the reply's projectOps.
+const LAUNCH_FEATURES = ['options', 'manual-mode', 'project-ops'];
 
 // onLaunch(request) -> { ok: true, ... } | { ok: false, error }, may be async.
 // onSessionStates() -> { ok: true, sessions } answers a 'session-states' request.
-async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, logger = null }) {
+// onProjectOp(op, args) -> { ok: true, ... } | { ok: false, error } answers a
+// 'project-op' request, may be async.
+async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, onProjectOp = null, logger = null }) {
   await clearStaleSocket(socketPath);
 
   const server = net.createServer(socket => {
@@ -161,13 +184,26 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionS
         logger?.warn?.(`[launch-socket] rejected: ${parsed.error}`);
         return reply({ ok: false, error: parsed.error });
       }
-      if (parsed.request.type === 'features') return reply({ ok: true, features: LAUNCH_FEATURES });
+      if (parsed.request.type === 'features') return reply({ ok: true, features: LAUNCH_FEATURES, projectOps: PROJECT_OPS });
       if (parsed.request.type === 'session-states') {
         if (!onSessionStates) return reply({ ok: false, error: 'session states not available' });
         try {
           return reply(await onSessionStates());
         } catch (err) {
           return reply({ ok: false, error: err?.message || 'session states failed' });
+        }
+      }
+      if (parsed.request.type === 'project-op') {
+        if (!onProjectOp) return reply({ ok: false, error: 'project ops not available' });
+        const { op, args } = parsed.request;
+        try {
+          const result = await onProjectOp(op, args);
+          if (result?.error) logger?.warn?.(`[launch-socket] ${op} refused: ${result.error}`);
+          else logger?.info?.(`[launch-socket] ${op} done`);
+          return reply(result?.error ? { ...result, ok: false } : { ok: true, ...result });
+        } catch (err) {
+          logger?.error?.(`[launch-socket] ${op} failed: ${err?.message || String(err)}`);
+          return reply({ ok: false, error: err?.message || `${op} failed` });
         }
       }
       try {
@@ -206,6 +242,7 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionS
 module.exports = {
   MAX_REQUEST_BYTES,
   LAUNCH_FEATURES,
+  PROJECT_OPS,
   defaultLaunchPaths,
   ensureLaunchToken,
   tokensMatch,
