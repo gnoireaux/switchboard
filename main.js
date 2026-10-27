@@ -20,6 +20,21 @@ if (process.env.SWITCHBOARD_DATA_DIR) {
   app.setPath('userData', path.resolve(process.env.SWITCHBOARD_DATA_DIR, 'electron'));
 }
 
+// SWITCHBOARD_REMOTE_DEBUGGING_PORT opens the Chrome DevTools port on every
+// launch, Dock included, so a running instance can be inspected without a
+// restart that would end its sessions. Off unless set: the port has no
+// authentication, and whoever reaches it can run any code in the window.
+const remoteDebuggingPort = process.env.SWITCHBOARD_REMOTE_DEBUGGING_PORT;
+if (remoteDebuggingPort) {
+  const port = Number(remoteDebuggingPort);
+  if (Number.isInteger(port) && port >= 1024 && port <= 65535) {
+    app.commandLine.appendSwitch('remote-debugging-port', String(port));
+    log.info(`[startup] remote debugging on 127.0.0.1:${port}`);
+  } else {
+    log.warn(`[startup] ignoring SWITCHBOARD_REMOTE_DEBUGGING_PORT=${remoteDebuggingPort}: not a port in 1024-65535`);
+  }
+}
+
 log.transports.file.level = app.isPackaged ? 'info' : 'debug';
 log.transports.console.level = app.isPackaged ? 'info' : 'debug';
 
