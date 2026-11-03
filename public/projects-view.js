@@ -11,7 +11,7 @@
 // Right-click works on a project, a track and a session.
 //
 // Depends on globals from app.js: projectsContent, cachedProjectTree,
-// cachedProjectTreeAll, showArchived, searchMatchIds, searchInput,
+// cachedProjectTreeAll, sessionFilterStates, searchMatchIds, searchInput,
 // activeSessionId, activePtyIds, attentionSessions, responseReadySessions,
 // sessionBusyState, sessionMap, pendingSessions, openSessions, activeTab,
 // gridViewActive, visibleSessionCount, loadProjects, refreshSidebar, launchNewSession,
@@ -268,7 +268,7 @@ function cliIcon(session, size = 14) {
 // --- Tree helpers ---
 
 function currentProjectTree() {
-  return (searchMatchIds !== null || showArchived) ? cachedProjectTreeAll : cachedProjectTree;
+  return (searchMatchIds !== null || needsArchivedSessions(sessionFilterStates)) ? cachedProjectTreeAll : cachedProjectTree;
 }
 
 function findTreeProject(id) {

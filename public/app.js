@@ -78,10 +78,8 @@ function saveExpandedSlugs() {
   document.querySelectorAll('.slug-group:not(.collapsed)').forEach(g => { if (g.id) expanded.push(g.id); });
   sessionStorage.setItem('expandedSlugs', JSON.stringify(expanded));
 }
-let showArchived = false;
-let showStarredOnly = false;
-let showRunningOnly = false;
-let showTodayOnly = false;
+// Tri-state Sessions-tab filters (session-filters.js), combined with AND.
+let sessionFilterStates = defaultSessionFilters();
 // Folder paths whose Sessions-tab group is pinned to the top (folder-pins.js).
 // Read once: only this window changes them, so a later reload must not
 // overwrite a toggle whose write is still in flight.
@@ -583,7 +581,7 @@ function refreshSidebar({ resort = false, reason = 'project' } = {}) {
   // When searching, always use all projects (search ignores archive filter)
   let projects = (searchMatchIds !== null)
     ? cachedAllProjects
-    : (showArchived ? cachedAllProjects : cachedProjects);
+    : (needsArchivedSessions(sessionFilterStates) ? cachedAllProjects : cachedProjects);
 
   if (searchMatchIds !== null) {
     projects = projects.map(p => {
@@ -602,36 +600,28 @@ function refreshSidebar({ resort = false, reason = 'project' } = {}) {
   if (typeof refreshProjectViews === 'function') refreshProjectViews({ reason });
 }
 
-// --- Archive toggle ---
+// --- Filter toggles: each click moves its filter to the next state ---
 archiveToggle.innerHTML = ICONS.archive(18);
-archiveToggle.addEventListener('click', () => {
-  showArchived = !showArchived;
-  archiveToggle.classList.toggle('active', showArchived);
-  refreshSidebar({ resort: true });
-});
-
-// --- Star filter toggle ---
-starToggle.addEventListener('click', () => {
-  showStarredOnly = !showStarredOnly;
-  if (showStarredOnly) { showRunningOnly = false; runningToggle.classList.remove('active'); }
-  starToggle.classList.toggle('active', showStarredOnly);
-  refreshSidebar({ resort: true });
-});
-
-// --- Running filter toggle ---
-runningToggle.addEventListener('click', () => {
-  showRunningOnly = !showRunningOnly;
-  if (showRunningOnly) { showStarredOnly = false; starToggle.classList.remove('active'); }
-  runningToggle.classList.toggle('active', showRunningOnly);
-  refreshSidebar({ resort: true });
-});
-
-// --- Today filter toggle ---
-todayToggle.addEventListener('click', () => {
-  showTodayOnly = !showTodayOnly;
-  todayToggle.classList.toggle('active', showTodayOnly);
-  refreshSidebar({ resort: true });
-});
+const filterToggles = { running: runningToggle, starred: starToggle, today: todayToggle, archived: archiveToggle };
+function renderFilterToggle(filterName) {
+  const button = filterToggles[filterName];
+  const state = sessionFilterStates[filterName];
+  // Highlighted = only these; struck through = these hidden; archived has a
+  // middle "shown with the rest" state of its own.
+  button.classList.toggle('active', state === FILTER_ONLY);
+  button.classList.toggle('excluded', state === FILTER_EXCLUDE);
+  button.classList.toggle('included', state === ARCHIVED_INCLUDE && filterName === 'archived');
+  button.title = filterTooltip(filterName, state);
+  button.setAttribute('aria-label', button.title);
+}
+for (const [filterName, button] of Object.entries(filterToggles)) {
+  renderFilterToggle(filterName);
+  button.addEventListener('click', () => {
+    sessionFilterStates = { ...sessionFilterStates, [filterName]: nextFilterState(filterName, sessionFilterStates[filterName]) };
+    renderFilterToggle(filterName);
+    refreshSidebar({ resort: true });
+  });
+}
 
 // --- Re-sort button ---
 resortBtn.addEventListener('click', () => {

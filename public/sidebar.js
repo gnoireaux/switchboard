@@ -1,7 +1,7 @@
 // --- Sidebar rendering ---
 // Depends on globals: sidebarContent, openSessions, activeSessionId, activePtyIds,
 // pendingSessions, sessionMap, sortedOrder, searchMatchIds,
-// searchMatchProjectPaths, showStarredOnly, showRunningOnly, showTodayOnly,
+// searchMatchProjectPaths, sessionFilterStates,
 // visibleSessionCount, sessionMaxAgeDays, attentionSessions, responseReadySessions,
 // sessionBusyState, cachedProjects, cachedAllProjects, gridCards, gridViewActive (app.js)
 // Depends on: cleanDisplayName, formatDate, escapeHtml (utils.js), ICONS (icons.js),
@@ -127,19 +127,15 @@ function buildSlugGroup(slug, sessions) {
 // Returns { filtered, visible, older, sortOrderEntry } or null if the group
 // should be skipped.
 function processProjectSessions(project, resort, previousOrder = sortedOrder) {
-  let filtered = project.sessions;
-  if (showStarredOnly) filtered = filtered.filter(s => s.starred);
-  if (showRunningOnly) filtered = filtered.filter(s => activePtyIds.has(s.sessionId));
-  if (showTodayOnly) {
-    const now = new Date();
-    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-    filtered = filtered.filter(s => {
-      if (!s.modified) return false;
-      const d = new Date(s.modified);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` === todayStr;
-    });
-  }
-  const anyFilterActive = showStarredOnly || showRunningOnly || showTodayOnly || searchMatchIds !== null;
+  // A search looks through archived sessions too, unless the archived filter
+  // asks for archived ones only.
+  const filters = (searchMatchIds !== null && sessionFilterStates.archived === ARCHIVED_HIDE)
+    ? { ...sessionFilterStates, archived: ARCHIVED_INCLUDE }
+    : sessionFilterStates;
+  const filterContext = { isRunning: id => activePtyIds.has(id), todayKey: localDayKey(new Date()) };
+  let filtered = project.sessions.filter(s => sessionMatchesFilters(s, filters, filterContext));
+  const narrowed = anyNarrowingFilter(sessionFilterStates);
+  const anyFilterActive = narrowed || searchMatchIds !== null;
   if (filtered.length === 0 && !project._projectMatchedOnly && (project.sessions.length > 0 || anyFilterActive)) return null;
 
   // Sort
@@ -200,7 +196,7 @@ function processProjectSessions(project, resort, previousOrder = sortedOrder) {
   // Truncate
   let visible = [];
   let older = [];
-  if (searchMatchIds !== null || showStarredOnly || showRunningOnly || showTodayOnly) {
+  if (anyFilterActive) {
     visible = allItems;
   } else {
     let count = 0;
@@ -408,7 +404,7 @@ function renderProjects(projects, resort) {
     // Auto-collapse if most recent session is older than threshold, or project matched with no sessions
     if (project._projectMatchedOnly) {
       header.classList.add('collapsed');
-    } else if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+    } else if (searchMatchIds === null && !anyNarrowingFilter(sessionFilterStates)) {
       const mostRecent = filtered[0]?.modified;
       if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
         header.classList.add('collapsed');
@@ -456,7 +452,7 @@ function renderProjects(projects, resort) {
       wtSessionsList.className = 'worktree-sessions';
 
       // Auto-collapse worktree if stale
-      if (searchMatchIds === null && !showStarredOnly && !showRunningOnly) {
+      if (searchMatchIds === null && !anyNarrowingFilter(sessionFilterStates)) {
         const mostRecent = wtResult.filtered[0]?.modified;
         if (mostRecent && (Date.now() - new Date(mostRecent)) > sessionMaxAgeDays * 86400000) {
           wtHeader.classList.add('collapsed');
