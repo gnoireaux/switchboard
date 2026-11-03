@@ -87,13 +87,18 @@ let pinnedFolderPaths = new Set();
 const pinnedFoldersLoad = window.api.getSetting(PINNED_FOLDERS_SETTING_KEY)
   .then(value => { pinnedFolderPaths = new Set(normalizePinnedFolders(value)); })
   .catch(() => {});
-async function togglePinnedFolderGroup(folderPath) {
-  const next = togglePinnedFolder([...pinnedFolderPaths], folderPath);
-  pinnedFolderPaths = new Set(next);
-  // A user action: re-sort, as the filter toggles do, so an unpinned group
-  // drops back among the others instead of staying where it sat.
-  refreshSidebar({ resort: true });
-  await window.api.setSetting(PINNED_FOLDERS_SETTING_KEY, next);
+function togglePinnedFolderGroup(folderPath) {
+  return togglePinnedFolderAndSave([...pinnedFolderPaths], folderPath, {
+    getSetting: key => window.api.getSetting(key),
+    setSetting: (key, value) => window.api.setSetting(key, value),
+    apply: paths => {
+      pinnedFolderPaths = new Set(paths);
+      // A user action: re-sort, as the filter toggles do, so an unpinned group
+      // drops back among the others instead of staying where it sat.
+      refreshSidebar({ resort: true });
+    },
+    logError: err => console.error('[folder-pins] could not save the pinned folder groups', err),
+  });
 }
 let cachedProjects = [];
 let cachedAllProjects = [];

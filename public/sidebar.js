@@ -294,10 +294,9 @@ function preserveSidebarDomState(fromEl, toEl) {
   return true;
 }
 
-function renderProjects(projects, resort) {
-  const newSidebar = document.createElement('div');
-
-  // Sort project groups using sortedOrder as source of truth
+// The folder groups in display order: data order on a resort, the order on
+// screen otherwise (sortedOrder, new groups first), then pinned groups on top.
+function orderProjectGroups(projects, resort) {
   if (!resort && sortedOrder.length > 0) {
     const orderIndex = new Map(sortedOrder.map((e, i) => [e.projectPath, i]));
     projects = [...projects].sort((a, b) => {
@@ -309,8 +308,12 @@ function renderProjects(projects, resort) {
       return 0;
     });
   }
-  // projects are now in the correct order (data order for resort, preserved order otherwise)
-  projects = orderPinnedFoldersFirst(projects, pinnedFolderPaths);
+  return orderPinnedFoldersFirst(projects, pinnedFolderPaths);
+}
+
+function renderProjects(projects, resort) {
+  const newSidebar = document.createElement('div');
+  projects = orderProjectGroups(projects, resort);
 
   // Detect worktree projects and group them under their parent
   const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;

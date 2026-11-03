@@ -58,3 +58,45 @@ test('a pin on a folder with no group on screen changes nothing', () => {
   const ordered = orderPinnedFoldersFirst(folders('/a', '/b'), new Set(['/gone']));
   assert.deepEqual(pathsOf(ordered), ['/a', '/b']);
 });
+
+const { togglePinnedFolderAndSave } = require('../public/folder-pins');
+
+function saveRecorder({ setSetting, getSetting } = {}) {
+  const applied = [], stored = [], errors = [];
+  return {
+    applied, stored, errors,
+    deps: {
+      setSetting: setSetting || (async (key, value) => { stored.push([key, value]); }),
+      getSetting: getSetting || (async () => null),
+      apply: paths => applied.push(paths),
+      logError: err => errors.push(err.message),
+    },
+  };
+}
+
+test('a pin toggle shows at once, then is stored under the pins key', async () => {
+  const r = saveRecorder();
+  await togglePinnedFolderAndSave(['/a'], '/b', r.deps);
+  assert.deepEqual(r.applied, [['/a', '/b']]);
+  assert.deepEqual(r.stored, [['pinnedSessionFolders', ['/a', '/b']]]);
+  assert.deepEqual(r.errors, []);
+});
+
+test('a pin whose write fails is replaced on screen by what the database still holds', async () => {
+  const r = saveRecorder({
+    setSetting: async () => { throw new Error('disk full'); },
+    getSetting: async () => ['/a', '/other-window'],
+  });
+  await togglePinnedFolderAndSave(['/a'], '/b', r.deps);
+  assert.deepEqual(r.applied, [['/a', '/b'], ['/a', '/other-window']]);
+  assert.deepEqual(r.errors, ['disk full']);
+});
+
+test('when the database cannot be read back either, the list from before the click returns', async () => {
+  const r = saveRecorder({
+    setSetting: async () => { throw new Error('disk full'); },
+    getSetting: async () => { throw new Error('closed'); },
+  });
+  await togglePinnedFolderAndSave(['/a', '/b'], '/a', r.deps);
+  assert.deepEqual(r.applied, [['/b'], ['/a', '/b']]);
+});
