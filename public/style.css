@@ -298,6 +298,11 @@ body { display: flex; flex-direction: column; }
   color: #f5be3c;
 }
 
+/* Filled like a starred session's star while the filter shows starred only. */
+#star-toggle.active svg {
+  fill: currentColor;
+}
+
 #archive-toggle.active {
   background: rgba(120,130,255,0.1);
   border-color: rgba(120,130,255,0.25);
