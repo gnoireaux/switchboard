@@ -437,6 +437,7 @@ function readInBackground(plans) {
  * everything afterwards would be costly.
  */
 function pruneVanishedFolders(metaMap) {
+  let pruned = 0;
   for (const folder of metaMap.keys()) {
     try {
       const h = harnessForFolder(folder);
@@ -444,10 +445,12 @@ function pruneVanishedFolders(metaMap) {
       if (!fs.existsSync(root) || fs.existsSync(resolveFolderPath(folder))) continue;
       deleteCachedFolder(folder);
       deleteSearchFolder(folder);
+      pruned++;
     } catch (err) {
       console.error('Error pruning folder', folder, err);
     }
   }
+  return pruned;
 }
 
 /**
@@ -812,6 +815,9 @@ async function indexFoldersInWorker({ folders, force = false, progress = () => {
       throw err;
     }
   }
+  // A full pass (startup or reconcile) also drops folders that vanished while
+  // the app was closed; a watcher-driven pass names its folders and skips this.
+  if (!folders && pruneVanishedFolders(metaMap) > 0) changed = true;
   for (const h of availableHarnesses()) {
     if (!disabledHarnessIds().has(h.id) && refreshHarnessTitles(h)) changed = true;
   }

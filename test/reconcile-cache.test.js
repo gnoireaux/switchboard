@@ -620,6 +620,29 @@ test('reconcile prunes a cached folder whose transcripts are gone and keeps pres
   }
 });
 
+test('the indexing worker’s full pass prunes a vanished folder too; a folder-only pass does not', async () => {
+  // The app reconciles through the worker (indexFoldersInWorker), not through
+  // reconcileCacheFromFilesystem's in-process path.
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'switchboard-prune-worker-'));
+  try {
+    writeSession(path.join(projectsDir, 'proj-present'), '/tmp/proj-present');
+    const fake = makeFakeDb(metaFor('proj-present', 'proj-moved-away'));
+    const pruned = recordPrunes(fake);
+    sessionCache.init({ PROJECTS_DIR: projectsDir, activeSessions: new Map(),
+      getMainWindow: () => null, log: console, db: fake.db });
+
+    await sessionCache.indexFoldersInWorker({ folders: ['proj-present'], pauseMs: 0 });
+    assert.deepEqual(pruned.cache, [], 'a watcher event for one folder leaves the others alone');
+
+    const result = await sessionCache.indexFoldersInWorker({ pauseMs: 0 });
+    assert.deepEqual(pruned.cache, ['proj-moved-away']);
+    assert.deepEqual(pruned.search, ['proj-moved-away'], 'its search entries go too');
+    assert.equal(result.changed, true, 'the renderer is told the list changed');
+  } finally {
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
 test('a missing transcript root prunes nothing', () => {
   const projectsDir = path.join(os.tmpdir(), 'switchboard-absent-root-' + process.pid);
   const fake = makeFakeDb(metaFor('proj-a', 'proj-b'));
