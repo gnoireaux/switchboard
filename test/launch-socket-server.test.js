@@ -8,6 +8,7 @@ const path = require('path');
 const {
   defaultLaunchPaths, ensureLaunchToken, tokensMatch, parseLaunchRequest,
   clearStaleSocket, startLaunchSocketServer, PROJECT_OPS,
+  bundledLaunchClientPath, removeLaunchClientPointer,
 } = require('../launch-socket-server');
 
 function tmpDir() {
@@ -31,7 +32,7 @@ function request(socketPath, payload) {
 }
 
 test('the default paths live under ~/.switchboard', () => {
-  const paths = defaultLaunchPaths('/home/someone');
+  const paths = defaultLaunchPaths('/home/someone', null);
   assert.equal(paths.socketPath, '/home/someone/.switchboard/launch.sock');
   assert.equal(paths.tokenPath, '/home/someone/.switchboard/launch-token');
 });
@@ -437,5 +438,85 @@ test('the project-op client exits 3 on a Switchboard that predates project ops',
   } finally {
     for (const conn of held) conn.destroy();
     await new Promise(resolve => old.close(resolve));
+  }
+});
+
+test('the launch-client pointer sits next to the socket, in the instance\u2019s own data dir', () => {
+  assert.equal(defaultLaunchPaths('/home/someone', null).launchClientPointerPath, '/home/someone/.switchboard/launch-client');
+  assert.equal(defaultLaunchPaths('/home/someone', '/home/someone/.switchboard-alt').launchClientPointerPath,
+    '/home/someone/.switchboard-alt/launch-client');
+});
+
+test('the bundled client is the checkout\u2019s script, or the unpacked copy in a packaged app', () => {
+  assert.equal(bundledLaunchClientPath({ appRoot: '/src/switchboard' }), '/src/switchboard/scripts/launch-session.js');
+  assert.equal(
+    bundledLaunchClientPath({ appRoot: '/A.app/Contents/Resources/app.asar', isPackaged: true, resourcesPath: '/A.app/Contents/Resources' }),
+    '/A.app/Contents/Resources/app.asar.unpacked/scripts/launch-session.js',
+    'plain node cannot read inside app.asar');
+});
+
+test('a listening server publishes its client path, and withdraws it on close', async () => {
+  const dataDir = tmpDir();
+  const { socketPath, launchClientPointerPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  const clientPath = '/Apps/Switchboard.app/Contents/Resources/app.asar.unpacked/scripts/launch-session.js';
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret', onLaunch: () => ({ ok: true }),
+    launchClient: { pointerPath: launchClientPointerPath, clientPath },
+  });
+  assert.equal(fs.readFileSync(launchClientPointerPath, 'utf8'), `${clientPath}\n`);
+  assert.equal(fs.statSync(launchClientPointerPath).mode & 0o777, 0o600);
+  assert.deepEqual(fs.readdirSync(dataDir).sort(), ['launch-client', 'launch.sock'], 'no temporary file is left behind');
+  await handle.close();
+  assert.equal(fs.existsSync(launchClientPointerPath), false);
+});
+
+test('closing leaves a pointer that another instance rewrote since', async () => {
+  const dataDir = tmpDir();
+  const { socketPath, launchClientPointerPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  const handle = await startLaunchSocketServer({
+    socketPath, token: 'secret', onLaunch: () => ({ ok: true }),
+    launchClient: { pointerPath: launchClientPointerPath, clientPath: '/old/scripts/launch-session.js' },
+  });
+  fs.writeFileSync(launchClientPointerPath, '/new/scripts/launch-session.js\n');
+  await handle.close();
+  assert.equal(fs.readFileSync(launchClientPointerPath, 'utf8'), '/new/scripts/launch-session.js\n');
+  assert.equal(removeLaunchClientPointer(path.join(dataDir, 'missing'), '/x'), false, 'a missing pointer is not an error');
+});
+
+test('a server that cannot listen publishes no client path', async () => {
+  const dataDir = tmpDir();
+  const { socketPath, launchClientPointerPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  const live = net.createServer(s => s.end());
+  await new Promise(resolve => live.listen(socketPath, resolve));
+  try {
+    await assert.rejects(startLaunchSocketServer({
+      socketPath, token: 'secret', onLaunch: () => ({ ok: true }),
+      launchClient: { pointerPath: launchClientPointerPath, clientPath: '/second/scripts/launch-session.js' },
+    }));
+    assert.equal(fs.existsSync(launchClientPointerPath), false);
+  } finally {
+    await new Promise(resolve => live.close(resolve));
+  }
+});
+
+test('the client runs from an unpacked app layout, where its require resolves outside app.asar', async () => {
+  const { execFile } = require('child_process');
+  const unpacked = path.join(tmpDir(), 'app.asar.unpacked');
+  fs.mkdirSync(path.join(unpacked, 'scripts'), { recursive: true });
+  fs.copyFileSync(path.join(__dirname, '..', 'launch-socket-server.js'), path.join(unpacked, 'launch-socket-server.js'));
+  fs.copyFileSync(path.join(__dirname, '..', 'scripts', 'launch-session.js'), path.join(unpacked, 'scripts', 'launch-session.js'));
+  const dataDir = tmpDir();
+  const { socketPath, tokenPath } = defaultLaunchPaths(os.homedir(), dataDir);
+  const handle = await startLaunchSocketServer({ socketPath, token: ensureLaunchToken(tokenPath), onLaunch: () => ({ ok: true }) });
+  try {
+    const result = await new Promise(resolve => {
+      execFile(process.execPath, [path.join(unpacked, 'scripts', 'launch-session.js'), '--features'],
+        { env: { ...process.env, SWITCHBOARD_DATA_DIR: dataDir } },
+        (err, stdout, stderr) => resolve({ code: err ? err.code : 0, stdout, stderr }));
+    });
+    assert.equal(result.code, 0, result.stderr);
+    assert.deepEqual(result.stdout.trim().split('\n'), ['options', 'manual-mode', 'project-ops']);
+  } finally {
+    await handle.close();
   }
 });
