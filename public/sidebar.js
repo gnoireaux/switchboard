@@ -314,6 +314,7 @@ function renderProjects(projects, resort) {
     });
   }
   // projects are now in the correct order (data order for resort, preserved order otherwise)
+  projects = orderPinnedFoldersFirst(projects, pinnedFolderPaths);
 
   // Detect worktree projects and group them under their parent
   const worktreePattern = /^(.+?)\/\.claude\/worktrees\/([^/]+)\/?$/;
@@ -343,7 +344,8 @@ function renderProjects(projects, resort) {
 
     // Build DOM
     const group = document.createElement('div');
-    group.className = 'project-group';
+    const folderPinned = pinnedFolderPaths.has(project.projectPath);
+    group.className = folderPinned ? 'project-group project-group--pinned' : 'project-group';
     group.id = fId;
 
     const header = document.createElement('div');
@@ -362,6 +364,15 @@ function renderProjects(projects, resort) {
       ? '<span class="worktree-branch-icon project-worktree-icon"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 8c0-2.76-2.46-5-5.5-5S2 5.24 2 8h2l1-1 1 1h4"/><path d="M13 7.14A5.82 5.82 0 0 1 16.5 6c3.04 0 5.5 2.24 5.5 5h-3l-1-1-1 1h-3"/><path d="M5.89 9.71c-2.15 2.15-2.3 5.47-.35 7.43l4.24-4.25.7-.7.71-.71 2.12-2.12c-1.95-1.96-5.27-1.8-7.42.35"/><path d="M11 15.5c.5 2.5-.17 4.5-1 6.5h4c2-5.5-.5-12-1-14"/></svg></span> '
       : '';
     header.innerHTML = `<span class="arrow">&#9660;</span> ${branchMark}<span class="project-name">${escapeHtml(shortName)}</span>`;
+
+    const pinBtn = document.createElement('button');
+    pinBtn.type = 'button';
+    pinBtn.className = folderPinned ? 'project-pin-btn pinned' : 'project-pin-btn';
+    pinBtn.title = folderPinned ? 'Unpin this folder group' : 'Pin this folder group to the top';
+    pinBtn.setAttribute('aria-label', pinBtn.title);
+    pinBtn.setAttribute('aria-pressed', String(folderPinned));
+    pinBtn.innerHTML = ICONS.pin(14, folderPinned);
+    header.appendChild(pinBtn);
 
     const taskBtn = createProjectTaskButton(project);
     if (taskBtn) header.appendChild(taskBtn);
@@ -505,6 +516,10 @@ function rebindSidebarEvents(projects) {
     if (scheduleBtn) {
       scheduleBtn.onclick = (e) => { e.stopPropagation(); showFolderScheduleMenu(project.projectPath, scheduleBtn); };
     }
+    const pinBtn = header.querySelector('.project-pin-btn');
+    if (pinBtn) {
+      pinBtn.onclick = (e) => { e.stopPropagation(); togglePinnedFolderGroup(project.projectPath); };
+    }
     const settingsBtn = header.querySelector('.project-settings-btn');
     if (settingsBtn) {
       settingsBtn.onclick = (e) => { e.stopPropagation(); openSettingsViewer('project', project.projectPath); };
@@ -530,7 +545,7 @@ function rebindSidebarEvents(projects) {
       };
     }
     header.onclick = (e) => {
-      if (e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-task-btn')) return;
+      if (e.target.closest('.project-pin-btn') || e.target.closest('.project-new-btn') || e.target.closest('.project-archive-btn') || e.target.closest('.project-settings-btn') || e.target.closest('.project-schedule-btn') || e.target.closest('.project-task-btn')) return;
       header.classList.toggle('collapsed');
     };
   }

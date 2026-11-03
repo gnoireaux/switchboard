@@ -3131,6 +3131,54 @@ body { display: flex; flex-direction: column; }
   color: #e0a030;
 }
 
+/* Project header pin button: pins the folder group to the top of the list.
+   Shown on hover while unpinned, always once pinned. */
+.project-pin-btn {
+  background: transparent;
+  border: none;
+  color: #7a7a90;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  line-height: 0;
+  transition: all 0.15s;
+  opacity: 0;
+}
+
+.project-pin-btn svg {
+  display: block;
+}
+
+.project-header:hover .project-pin-btn,
+.project-pin-btn:focus-visible {
+  opacity: 1;
+}
+
+.project-pin-btn:hover {
+  background: rgba(120,130,255,0.1);
+  color: #8088ff;
+}
+
+.project-pin-btn.pinned {
+  opacity: 1;
+  color: #8088ff;
+}
+
+/* A pinned folder group: tinted so primary work stands out from the rest. */
+.project-group.project-group--pinned {
+  background: rgba(120,130,255,0.08);
+  border-color: rgba(120,130,255,0.30);
+}
+
+.project-group.project-group--pinned:hover {
+  border-color: rgba(120,130,255,0.45);
+}
+
 /* Project header gear button */
 .project-settings-btn {
   background: transparent;
