@@ -82,6 +82,21 @@ let showArchived = false;
 let showStarredOnly = false;
 let showRunningOnly = false;
 let showTodayOnly = false;
+// Folder paths whose Sessions-tab group is pinned to the top (folder-pins.js).
+// Read once: only this window changes them, so a later reload must not
+// overwrite a toggle whose write is still in flight.
+let pinnedFolderPaths = new Set();
+const pinnedFoldersLoad = window.api.getSetting(PINNED_FOLDERS_SETTING_KEY)
+  .then(value => { pinnedFolderPaths = new Set(normalizePinnedFolders(value)); })
+  .catch(() => {});
+async function togglePinnedFolderGroup(folderPath) {
+  const next = togglePinnedFolder([...pinnedFolderPaths], folderPath);
+  pinnedFolderPaths = new Set(next);
+  // A user action: re-sort, as the filter toggles do, so an unpinned group
+  // drops back among the others instead of staying where it sat.
+  refreshSidebar({ resort: true });
+  await window.api.setSetting(PINNED_FOLDERS_SETTING_KEY, next);
+}
 let cachedProjects = [];
 let cachedAllProjects = [];
 // Projects tab (projects-view.js): project → tracks → sessions, from
@@ -993,6 +1008,7 @@ async function loadProjects({ resort = false, reason = 'project' } = {}) {
     window.api.getProjects(true),
     window.api.getProjectTree(false).catch(() => ({ projects: [] })),
     window.api.getProjectTree(true).catch(() => ({ projects: [] })),
+    pinnedFoldersLoad,
     // Scheduled tasks ride along: the folder clocks and session chips read them.
     typeof loadSchedules === 'function' ? loadSchedules() : null,
   ]);
