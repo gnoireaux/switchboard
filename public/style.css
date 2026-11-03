@@ -316,6 +316,37 @@ body { display: flex; flex-direction: column; }
   color: #50b4ff;
 }
 
+/* A filter set to exclude: its sessions are hidden. Red tint, struck through. */
+#star-toggle, #archive-toggle, #running-toggle, #today-toggle {
+  position: relative;
+}
+
+#star-toggle.excluded, #archive-toggle.excluded, #running-toggle.excluded, #today-toggle.excluded {
+  background: rgba(240,80,80,0.1);
+  border-color: rgba(240,80,80,0.3);
+  color: #f06060;
+}
+
+#star-toggle.excluded::after, #archive-toggle.excluded::after,
+#running-toggle.excluded::after, #today-toggle.excluded::after {
+  content: '';
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 50%;
+  height: 1.5px;
+  background: currentColor;
+  transform: rotate(-45deg);
+  pointer-events: none;
+}
+
+/* Archived sessions shown alongside the rest (not only them): a lighter mark. */
+#archive-toggle.included {
+  border-color: rgba(120,130,255,0.35);
+  border-style: dashed;
+  color: #8088ff;
+}
+
 /* ---- Search ---- */
 #search-bar {
   padding: 0 16px 14px;
