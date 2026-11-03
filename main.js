@@ -73,7 +73,7 @@ const {
 } = require('./blocked-agent-notifications');
 const { INITIAL_PROMPT_FALLBACK_MS, buildInitialPromptWrites } = require('./initial-prompt-delivery');
 const {
-  defaultLaunchPaths, ensureLaunchToken, startLaunchSocketServer,
+  defaultLaunchPaths, ensureLaunchToken, startLaunchSocketServer, bundledLaunchClientPath,
 } = require('./launch-socket-server');
 const {
   createSessionStates, sessionStatesFilePath, writeSessionStatesFile, removeSessionStatesFile,
@@ -2611,13 +2611,17 @@ async function handleProjectOpRequest(op, args) {
 }
 
 async function startLaunchSocket() {
-  const { socketPath, tokenPath } = defaultLaunchPaths();
+  const { socketPath, tokenPath, launchClientPointerPath } = defaultLaunchPaths();
+  const clientPath = bundledLaunchClientPath({
+    appRoot: __dirname, isPackaged: app.isPackaged, resourcesPath: process.resourcesPath,
+  });
   try {
     const token = ensureLaunchToken(tokenPath);
     launchSocket = await startLaunchSocketServer({
       socketPath, token, logger: log, onLaunch: handleExternalLaunchRequest,
       onSessionStates: () => ({ ok: true, sessions: sessionStates.snapshot() }),
       onProjectOp: handleProjectOpRequest,
+      launchClient: { pointerPath: launchClientPointerPath, clientPath },
     });
   } catch (err) {
     // A dead entry point must not stop the app from running.

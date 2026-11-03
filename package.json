@@ -63,6 +63,9 @@
     "productName": "Switchboard",
     "files": [
       "*.js",
+      "scripts/launch-session.js",
+      "scripts/project-op.js",
+      "scripts/session-states.js",
       "harnesses/**/*",
       "workers/**/*",
       "public/**/*",
@@ -70,7 +73,11 @@
     ],
     "asarUnpack": [
       "node_modules/better-sqlite3/**",
-      "node_modules/node-pty/**"
+      "node_modules/node-pty/**",
+      "launch-socket-server.js",
+      "scripts/launch-session.js",
+      "scripts/project-op.js",
+      "scripts/session-states.js"
     ],
     "publish": {
       "provider": "github",
