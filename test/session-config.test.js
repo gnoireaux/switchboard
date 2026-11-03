@@ -75,9 +75,9 @@ test('scheduled launches use current folder defaults with only the selected CLI 
 
 test('optional settings wait behind More options until they hold a value', () => {
   const empty = SessionConfig.resolveOptions('claude', {}, {});
-  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', empty), ['model', 'effort', 'allowedTools', 'appendSystemPrompt', 'preLaunchCmd', 'addDirs']);
+  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', empty), ['model', 'effort', 'allowedTools', 'customArgs', 'appendSystemPrompt', 'preLaunchCmd', 'addDirs']);
   const filled = SessionConfig.resolveOptions('claude', { preLaunchCmd: 'aws-vault exec prod --' }, { model: 'opus' });
-  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', filled), ['effort', 'allowedTools', 'appendSystemPrompt', 'addDirs'],
+  assert.deepEqual(SessionConfig.fieldsBehindMore('claude', filled), ['effort', 'allowedTools', 'customArgs', 'appendSystemPrompt', 'addDirs'],
     'a saved model and a folder pre-launch command stay in view');
   assert.deepEqual(SessionConfig.fieldsBehindMore('codex', SessionConfig.resolveOptions('codex', {}, {})), ['codexModel', 'codexEffort', 'preLaunchCmd', 'addDirs']);
   assert.ok(!SessionConfig.fieldsBehindMore('claude', empty).includes('permissionMode'), 'the main settings are never tucked away');
@@ -197,4 +197,44 @@ test('a requested permission mode is never looser than the spawner\u2019s launch
 test('manual is a permission mode of its own, apart from the CLI default', () => {
   assert.deepEqual(SessionConfig.normalizeOverrides('claude', { permissionMode: 'manual' }), { permissionMode: 'manual' });
   assert.deepEqual(SessionConfig.normalizeOverrides('claude', { permissionMode: null }), { permissionMode: null });
+});
+
+
+test('resume with config shows and passes the settings of the CLI that wrote the session', async () => {
+  const created = [];
+  const element = () => {
+    const children = {};
+    const el = { setAttribute() {}, appendChild() {}, remove() {},
+      querySelector: selector => children[selector] || (children[selector] = element()) };
+    created.push(el);
+    return el;
+  };
+  const mounts = [];
+  const opened = [];
+  const effective = { codexSandbox: 'workspace-write', codexModel: 'gpt-5', permissionMode: 'plan', chrome: true };
+  const context = vm.createContext({
+    SessionConfig,
+    SessionConfigForm: { mount: (_container, opts) => {
+      mounts.push(opts);
+      return { getOptions: () => SessionConfig.resolveOptions(opts.runtime, opts.defaults) };
+    } },
+    document: { createElement: element, body: { appendChild() {} }, addEventListener() {}, removeEventListener() {} },
+    escapeHtml: value => String(value),
+    openSession: (session, options) => opened.push([session, options]),
+    window: { api: { getEffectiveSettings: async () => effective } },
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../public/dialogs.js'), 'utf8'), context);
+  const session = { sessionId: 'abc', projectPath: '/project', runtime: 'codex', name: 'Daily check' };
+  await context.showResumeSessionDialog(session);
+  assert.equal(mounts[0].runtime, 'codex');
+  assert.equal(mounts[0].resume, true);
+  const dialog = created[1];
+  assert.match(dialog.innerHTML, /Resume Codex Session/);
+  dialog.querySelector('.new-session-start-btn').onclick();
+  assert.equal(opened[0][0], session);
+  const options = opened[0][1];
+  assert.equal(options.codexSandbox, 'workspace-write');
+  assert.equal(options.codexModel, 'gpt-5');
+  assert.equal(options.permissionMode, undefined);
+  assert.equal(options.chrome, undefined);
 });

@@ -430,7 +430,15 @@ const { deriveProjectPath } = claudeHarness;
 
 // Session cache → session-cache.js
 const sessionCache = require('./session-cache');
+const { SessionIndexer } = require('./session-indexer');
+const sessionIndexer = new SessionIndexer({
+  projectsDir: PROJECTS_DIR,
+  onStatus: (text, type) => sessionCache.sendStatus(text, type),
+  onChanged: () => sessionCache.notifyRendererProjectsChanged('sessions'),
+  onError: err => log.error('[indexer]', err),
+});
 sessionCache.init({
+  indexer: sessionIndexer,
   PROJECTS_DIR,
   activeSessions,
   getMainWindow: () => mainWindow,
@@ -467,6 +475,14 @@ projects.initPlanWatch({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   },
 });
+// --- Git Graph tab: read-only commit graph service ---
+const gitGraphService = require('./git-graph-service');
+gitGraphService.init({
+  log,
+  send: (channel, ...args) => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
+  },
+});
 
 // --- IPC: browse-folder ---
 ipcMain.handle('browse-folder', async () => {
@@ -479,7 +495,7 @@ ipcMain.handle('browse-folder', async () => {
 });
 
 // --- IPC: add-project ---
-ipcMain.handle('add-project', (_event, projectPath) => {
+ipcMain.handle('add-project', async (_event, projectPath) => {
   try {
     // Validate the path exists and is a directory
     const stat = fs.statSync(projectPath);
@@ -512,7 +528,7 @@ ipcMain.handle('add-project', (_event, projectPath) => {
     }
 
     // Immediately index the new folder so it's in cache before frontend renders
-    refreshFolder(folder);
+    await refreshFolder(folder);
     notifyRendererProjectsChanged();
 
     return { ok: true, folder, projectPath };
@@ -624,6 +640,15 @@ ipcMain.handle('get-project-git-info', guarded((id) => projects.projectGitInfo(i
 ipcMain.handle('get-project-git-diff', guarded((id, folderPath, filePath) => projects.projectGitDiff(id, folderPath, filePath)));
 ipcMain.handle('get-folder-git-status', guarded((folderPath) => projects.folderGitInfo(String(folderPath || ''))));
 ipcMain.handle('inspect-project-folder', guarded((folderPath) => projects.inspectFolder(String(folderPath || ''))));
+
+// --- IPC: Git Graph tab (read-only) ---
+// Every handler delegates one line into projects.js, same shape as the four
+// git handlers above; projects.js re-checks the attached-folder boundary.
+ipcMain.handle('get-project-git-graph', guarded((id, folderPath, opts) => projects.projectGitGraph(id, String(folderPath || ''), opts || {})));
+ipcMain.handle('get-git-graph-commit-detail', guarded((id, folderPath, hash) => projects.projectGitGraphCommitDetail(id, String(folderPath || ''), hash)));
+ipcMain.handle('get-git-graph-compare-detail', guarded((id, folderPath, fromHash, toHash) => projects.projectGitGraphCompareDetail(id, String(folderPath || ''), fromHash, toHash)));
+ipcMain.handle('get-git-graph-file-at-revision', guarded((id, folderPath, rev, filePath) => projects.projectGitGraphFileAtRevision(id, String(folderPath || ''), rev, filePath)));
+ipcMain.handle('get-git-graph-file-diff-between', guarded((id, folderPath, fromRev, toRevOrNull, filePath) => projects.projectGitGraphFileDiffBetween(id, String(folderPath || ''), fromRev, toRevOrNull, filePath)));
 // The .env files a folder has, and the ones the dialog ticks by default,
 // so a new worktree can be offered its repository's local environment.
 ipcMain.handle('list-env-files', guarded((folderPath) => ({
@@ -777,7 +802,7 @@ ipcMain.handle('unwatch-file', (_event, filePath) => {
 
 ipcMain.handle('get-projects', (_event, showArchived) => {
   try {
-    const needsPopulate = !isCachePopulated() || !isSearchIndexPopulated();
+    const needsPopulate = !sessionIndexer.initialComplete && (!isCachePopulated() || !isSearchIndexPopulated());
 
     if (needsPopulate) {
       populateCacheViaWorker();
@@ -1589,6 +1614,16 @@ ipcMain.handle('open-terminal', async (_event, sessionId, projectPath, isNew, se
       let claudeCmd = attachAgentId ? binaryBypassingShellAliases(shell, harness.binary) : harness.binary;
       if (cliArgs.length) claudeCmd += ' ' + quoteArgvForShell(shell, cliArgs);
 
+      // customArgs is raw shell too, like preLaunchCmd below: the user's shell
+      // does the quoting, e.g. --settings '{"outputStyle": "Learning"}'
+      if (sessionOptions?.customArgs) {
+        const custom = String(sessionOptions.customArgs);
+        if (/[\r\n]/.test(custom)) {
+          return { ok: false, error: 'customArgs must not contain newlines' };
+        }
+        claudeCmd += ' ' + custom;
+      }
+
       // preLaunchCmd is raw shell by design (e.g. "aws-vault exec profile --") — block newlines only
       if (sessionOptions?.preLaunchCmd) {
         const pre = String(sessionOptions.preLaunchCmd);
@@ -2046,9 +2081,7 @@ function startProjectsWatcher() {
       if (fs.existsSync(folderPath)) {
         detectSessionTransitions(folder);
         refreshFolder(folder);
-      } else {
-        deleteCachedFolder(folder);
-      }
+      } else refreshFolder(folder);
       changed = true;
     }
 

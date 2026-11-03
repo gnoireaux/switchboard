@@ -5,8 +5,6 @@ const { getFolderIndexMtimeMs } = require('./folder-index-state');
 const { encodeProjectPath } = require('./encode-project-path');
 const { getHarness, DEFAULT_HARNESS, harnessForFolder, availableHarnesses } = require('./harnesses');
 
-// Only Claude sessions are indexed today; the harness lookup is here so the
-// call sites already read the right way when codex folders join them.
 const claude = getHarness(DEFAULT_HARNESS);
 const { deriveProjectPath, readSessionFile } = claude;
 
@@ -33,8 +31,12 @@ let deleteCachedFolder, getCachedByFolder, getCachedSession, upsertCachedSession
 let deleteSearchFolder, deleteSearchSession, upsertSearchEntries;
 let setFolderMeta, getAllFolderMeta, getAllMeta, getAllCached, getSetting, setSetting, getMeta, setName;
 let updateCachedAiTitle, updateSearchTitle;
+let indexer = null;
+let withImmediateTransaction = null;
 
 function init(ctx) {
+  indexer = ctx.indexer || null;
+  withImmediateTransaction = ctx.db.withImmediateTransaction || null;
   PROJECTS_DIR = ctx.PROJECTS_DIR;
   activeSessions = ctx.activeSessions;
   getMainWindow = ctx.getMainWindow;
@@ -58,6 +60,8 @@ function init(ctx) {
   setName = ctx.db.setName;
   updateCachedAiTitle = ctx.db.updateCachedAiTitle;
   updateSearchTitle = ctx.db.updateSearchTitle;
+  inlineReadLimitBytes = ctx.inlineReadLimitBytes ?? INLINE_READ_LIMIT_BYTES;
+  backgroundReadFailed = false;
 }
 
 /**
@@ -101,6 +105,15 @@ function initializeHiddenProjectTimestamps(now = Date.now()) {
  * second signal for filesystems with coarse or unavailable birth times.
  */
 function restoreProjectsWithNewSessions(sessions) {
+  if (withImmediateTransaction) {
+    const hidden = new Set((getSetting('global') || {}).hiddenProjects || []);
+    if (!sessions.some(s => hidden.has(s.projectPath))) return [];
+    return withImmediateTransaction(() => restoreProjectsWithNewSessionsImpl(sessions));
+  }
+  return restoreProjectsWithNewSessionsImpl(sessions);
+}
+
+function restoreProjectsWithNewSessionsImpl(sessions) {
   if (!sessions.length) return [];
 
   const global = getSetting('global') || {};
@@ -149,6 +162,7 @@ function restoreProjectsWithNewSessions(sessions) {
  * wins over the first-prompt summary.
  */
 function refreshHarnessTitles(harness) {
+  if (indexer) { indexer.titles(harness.id); return 0; }
   if (!harness?.readSessionTitles || !updateCachedAiTitle) return 0;
   const titles = harness.readSessionTitles();
   if (!(titles instanceof Map)) return 0; // unreadable: retain the last good data
@@ -206,13 +220,18 @@ function listAllFolders() {
   return folders;
 }
 
-/** Refresh a single folder incrementally: only re-read changed/new transcripts */
-function refreshFolder(folder) {
+/**
+ * Work out what refreshing a folder involves without reading a transcript:
+ * which files are new or changed (stat only) and which cached sessions lost
+ * their file. Null when the folder has nothing to index.
+ */
+function planFolderRefresh(folder, force = false) {
   const h = harnessForFolder(folder);
   const folderPath = resolveFolderPath(folder);
   if (!fs.existsSync(folderPath)) {
     deleteCachedFolder(folder);
-    return;
+    deleteSearchFolder(folder);
+    return null;
   }
   // Never mark writes that arrive during this pass as already indexed. The
   // Claude parser deliberately stops at its initial file size; a later append
@@ -226,7 +245,7 @@ function refreshFolder(folder) {
   const folderProject = h.deriveProjectPath(folderPath, folder);
   if (h.groupsByProject && !folderProject) {
     setFolderMeta(folder, null, indexMtimeMs);
-    return;
+    return null;
   }
 
   // Get what's currently cached for this folder
@@ -236,17 +255,10 @@ function refreshFolder(folder) {
     cachedMap.set(row.sessionId, row.fileMtime);
   }
 
-  const transcripts = h.listTranscripts(folderPath);
-
   const currentIds = new Set();
+  const toRead = [];
 
-  // Collect all changes first, then batch DB writes to minimize lock duration
-  const sessionsToUpsert = [];
-  const searchEntriesToUpsert = [];
-  const namesToSet = [];
-  const sessionsToDelete = [];
-
-  for (const filePath of transcripts) {
+  for (const filePath of h.listTranscripts(folderPath)) {
     // Derived from the file name, so this costs no read — which is the whole
     // point of the mtime gate below.
     const sessionId = h.sessionIdFromPath(filePath);
@@ -254,43 +266,65 @@ function refreshFolder(folder) {
     currentIds.add(sessionId);
 
     // Check if file mtime changed
-    let fileMtime;
-    try { fileMtime = fs.statSync(filePath).mtime.toISOString(); } catch { continue; }
+    let stat;
+    try { stat = fs.statSync(filePath); } catch { continue; }
 
-    if (cachedMap.has(sessionId) && cachedMap.get(sessionId) === fileMtime) {
+    if (!force && cachedMap.has(sessionId) && cachedMap.get(sessionId) === stat.mtime.toISOString()) {
       continue; // unchanged, skip
     }
-
-    // File is new or modified — re-read it. The cached row carries the resume
-    // state, so an append costs the size of the append rather than the size of
-    // the file. Fetched per changed session on purpose: a folder holds
-    // thousands of sessions and only a couple change per flush.
-    const cachedRow = getCachedSession(sessionId);
-    const sess = h.readSessionFile(filePath, folder, folderProject, cachedRow);
-    if (sess) {
-      sessionsToUpsert.push(sess);
-      // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
-      // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
-      // be written there or they'd overwrite the user's UI rename on the next index pass.
-      const name = getMeta(sess.sessionId)?.name || sess.customTitle || sess.aiTitle || '';
-      searchEntriesToUpsert.push({
-        id: sess.sessionId, type: 'session', folder: sess.folder,
-        title: (name ? name + ' ' : '') + sess.summary, body: sess.textContent,
-      });
-      if (sess.customTitle) namesToSet.push({ id: sess.sessionId, name: sess.customTitle });
-    }
+    toRead.push({ filePath, sessionId, size: stat.size });
   }
 
-  // Remove sessions whose transcripts were deleted
-  for (const sessionId of cachedMap.keys()) {
-    if (!currentIds.has(sessionId)) {
-      sessionsToDelete.push(sessionId);
-    }
+  // Sessions whose transcripts were deleted
+  const removedIds = [...cachedMap.keys()].filter(sessionId => !currentIds.has(sessionId));
+
+  return { folder, harnessId: h.id, folderProject, indexMtimeMs, toRead, removedIds };
+}
+
+/** Read a plan's new or changed transcripts on this thread. */
+function readPlannedSessions(plan) {
+  const h = getHarness(plan.harnessId);
+  const sessions = [];
+  for (const { filePath, sessionId } of plan.toRead) {
+    // The cached row carries the resume state, so an append costs the size of
+    // the append rather than the size of the file. Fetched per changed session
+    // on purpose: a folder holds thousands of sessions and only a couple
+    // change per flush.
+    const sess = h.readSessionFile(filePath, plan.folder, plan.folderProject, getCachedSession(sessionId));
+    if (sess) sessions.push(sess);
+  }
+  return sessions;
+}
+
+/** Write a planned folder's freshly read sessions and its removals. */
+function applyFolderRefresh(plan, sessions, finalize = true) {
+  // Cache rows and their search documents must commit together. Otherwise a
+  // worker stopped between the two writes could leave an apparently current
+  // transcript permanently absent from search on the next pass.
+  if (withImmediateTransaction) {
+    return withImmediateTransaction(() => applyFolderRefreshImpl(plan, sessions, finalize));
+  }
+  return applyFolderRefreshImpl(plan, sessions, finalize);
+}
+
+function applyFolderRefreshImpl(plan, sessions, finalize) {
+  const searchEntriesToUpsert = [];
+  const namesToSet = [];
+  for (const sess of sessions) {
+    // Title precedence: user rename (session_meta.name) > JSONL custom-title > JSONL ai-title.
+    // Only customTitle (Claude /title) promotes to session_meta.name — AI titles must NEVER
+    // be written there or they'd overwrite the user's UI rename on the next index pass.
+    const name = getMeta(sess.sessionId)?.name || sess.customTitle || sess.aiTitle || '';
+    searchEntriesToUpsert.push({
+      id: sess.sessionId, type: 'session', folder: sess.folder,
+      title: (name ? name + ' ' : '') + sess.summary, body: sess.textContent,
+    });
+    if (sess.customTitle) namesToSet.push({ id: sess.sessionId, name: sess.customTitle });
   }
 
   // Batch all DB writes to reduce lock contention
-  if (sessionsToUpsert.length > 0) {
-    upsertCachedSessions(sessionsToUpsert);
+  if (sessions.length > 0) {
+    upsertCachedSessions(sessions);
   }
   if (searchEntriesToUpsert.length > 0) {
     // The DB upsert compares the existing content and replaces changed rows
@@ -300,15 +334,96 @@ function refreshFolder(folder) {
   for (const { id, name } of namesToSet) {
     setName(id, name);
   }
-  for (const sessionId of sessionsToDelete) {
+  for (const sessionId of finalize ? plan.removedIds : []) {
     deleteCachedSession(sessionId);
     deleteSearchSession(sessionId);
   }
 
-  restoreProjectsWithNewSessions(sessionsToUpsert);
+  restoreProjectsWithNewSessions(sessions);
 
   // Update folder mtime
-  setFolderMeta(folder, folderProject, indexMtimeMs);
+  if (finalize) setFolderMeta(plan.folder, plan.folderProject, plan.indexMtimeMs);
+}
+
+/** Refresh a single folder incrementally: only re-read changed/new transcripts */
+function refreshFolder(folder) {
+  if (indexer) return indexer.folder(folder);
+  const plan = planFolderRefresh(folder);
+  if (plan) applyFolderRefresh(plan, readPlannedSessions(plan));
+}
+
+// A reconcile pass that has to re-read more than this many bytes of
+// transcripts reads them on a worker thread. Ordinary passes re-read a few
+// changed files and stay inline. A cleared cache can mean gigabytes (a Codex
+// transcript is re-read whole), which would stall the window and terminals.
+const INLINE_READ_LIMIT_BYTES = 64 * 1024 * 1024;
+let inlineReadLimitBytes = INLINE_READ_LIMIT_BYTES;
+let backgroundRead = null; // resolves when the worker has reported every folder
+const backgroundFolders = new Set(); // folders the worker owns until it reports them
+let backgroundReadFailed = false; // after a worker failure, read inline as before
+
+/**
+ * Read the planned transcripts on a worker thread. The database lives on this
+ * thread, so each folder's sessions are written here as the worker reports it.
+ */
+function readInBackground(plans) {
+  const total = plans.reduce((n, plan) => n + plan.toRead.length, 0);
+  for (const plan of plans) backgroundFolders.add(plan.folder);
+  sendStatus(`Reading ${total} sessions…`, 'active');
+
+  return new Promise(resolve => {
+    const worker = new Worker(path.join(__dirname, 'workers', 'read-transcripts.js'), {
+      workerData: {
+        plans: plans.map(plan => ({
+          folder: plan.folder, harnessId: plan.harnessId, folderProject: plan.folderProject,
+          files: plan.toRead.map(({ filePath, sessionId }) => ({ filePath, prev: getCachedSession(sessionId) })),
+        })),
+      },
+    });
+
+    let finished = false;
+    function finish(error) {
+      if (finished) return;
+      finished = true;
+      // Folders the worker never reported are planned again by the next pass.
+      backgroundFolders.clear();
+      backgroundRead = null;
+      if (error) {
+        backgroundReadFailed = true;
+        console.error('Background session read failed:', error);
+        sendStatus('Reading sessions failed: ' + error, 'error');
+      } else {
+        sendStatus(`Read ${total} sessions`, 'done');
+        setTimeout(() => sendStatus(''), 5000).unref?.();
+      }
+      notifyRendererProjectsChanged('sessions');
+      resolve();
+    }
+
+    worker.on('message', (msg) => {
+      if (msg.type === 'done') { finish(); return; }
+      if (msg.type !== 'folder') return;
+      const plan = plans[msg.index];
+      if (msg.error) {
+        console.error('Error reconciling folder', plan.folder, msg.error);
+      } else {
+        try {
+          // A transcript written to after the worker read it is left for the
+          // next pass: its cached mtime stays stale, so it is read again.
+          const sessions = msg.sessions.filter(s => {
+            try { return fs.statSync(s.sessionFile).mtime.toISOString() === s.fileMtime; } catch { return false; }
+          });
+          applyFolderRefresh(plan, sessions);
+          refreshHarnessTitles(getHarness(plan.harnessId));
+        } catch (err) {
+          console.error('Error reconciling folder', plan.folder, err);
+        }
+      }
+      backgroundFolders.delete(plan.folder);
+    });
+    worker.on('error', (err) => finish(err.message));
+    worker.on('exit', (code) => finish(code === 0 ? null : `worker exited with code ${code}`));
+  });
 }
 
 /**
@@ -344,21 +459,44 @@ function pruneVanishedFolders(metaMap) {
  * the app was closed, or that predates the build which first indexed it, is
  * otherwise never picked up, because the cold-start full scan
  * (populateCacheViaWorker) only runs when the cache is completely empty.
+ *
+ * When the pass has more than INLINE_READ_LIMIT_BYTES to re-read, the reads
+ * run on a worker and this returns a promise that settles once they are
+ * written; otherwise everything is written before it returns null.
  */
 function reconcileCacheFromFilesystem() {
+  if (indexer) return indexer.reconcile();
   const metaMap = getAllFolderMeta();
+  const plans = [];
 
   for (const folder of listAllFolders()) {
+    if (backgroundFolders.has(folder)) continue;
     try {
       const meta = metaMap.get(folder);
       const folderPath = resolveFolderPath(folder);
       if (!meta || getFolderIndexMtimeMs(folderPath) > (meta.indexMtimeMs || 0)) {
-        refreshFolder(folder);
+        const plan = planFolderRefresh(folder);
+        if (plan) plans.push(plan);
       }
     } catch (err) {
       // One unreadable folder must not stop the rest — before this loop was
       // per-harness, a single bad directory aborted the whole pass.
       console.error('Error reconciling folder', folder, err);
+    }
+  }
+
+  const bytesToRead = plans.reduce((sum, plan) => sum + plan.toRead.reduce((n, f) => n + f.size, 0), 0);
+  const inBackground = bytesToRead > inlineReadLimitBytes && !backgroundReadFailed;
+  if (inBackground && !backgroundRead) {
+    backgroundRead = readInBackground(plans.filter(plan => plan.toRead.length));
+  }
+  for (const plan of plans) {
+    // While another worker is still busy, these wait for a later pass.
+    if (inBackground && plan.toRead.length) continue;
+    try {
+      applyFolderRefresh(plan, readPlannedSessions(plan));
+    } catch (err) {
+      console.error('Error reconciling folder', plan.folder, err);
     }
   }
 
@@ -370,6 +508,7 @@ function reconcileCacheFromFilesystem() {
   for (const h of availableHarnesses()) {
     if (!disabled.has(h.id)) refreshHarnessTitles(h);
   }
+  return backgroundRead;
 }
 
 /** Build projects response from cached data */
@@ -437,11 +576,13 @@ function buildProjectsFromCache(showArchived) {
   // renders are pure DB reads.
   try {
     const folderMeta = getAllFolderMeta();
-    const dirs = fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
-      .filter(d => d.isDirectory() && d.name !== '.git');
+    const dirs = indexer
+      ? [...folderMeta.keys()].filter(folder => !harnessForFolder(folder).folderPrefix).map(name => ({ name }))
+      : fs.readdirSync(PROJECTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory() && d.name !== '.git');
     for (const d of dirs) {
       let projectPath = folderMeta.get(d.name)?.projectPath;
-      if (!projectPath) {
+      if (!projectPath && !indexer) {
         projectPath = deriveProjectPath(path.join(PROJECTS_DIR, d.name), d.name);
         if (projectPath) setFolderMeta(d.name, projectPath, 0);
       }
@@ -528,6 +669,7 @@ function sendStatus(text, type) {
 let populatingCache = false;
 
 function populateCacheViaWorker() {
+  if (indexer) return indexer.populate();
   if (populatingCache) return;
   populatingCache = true;
   sendStatus('Scanning projects\u2026', 'active');
@@ -606,7 +748,78 @@ function populateCacheViaWorker() {
   });
 }
 
+// Used only inside the indexing worker. No transcript bodies cross back to the
+// main process. Each small commit releases SQLite's writer lock, then rests so
+// startup indexing does not monopolize CPU or disk bandwidth.
+async function indexFoldersInWorker({ folders, force = false, progress = () => {}, pauseMs = 10 } = {}) {
+  const metaMap = getAllFolderMeta();
+  const allFolders = folders || listAllFolders();
+  let count = 0;
+  let changed = false;
+  const externalTitles = new Map();
+  for (let i = 0; i < allFolders.length; i++) {
+    const folder = allFolders[i];
+    const meta = metaMap.get(folder);
+    if (!force && !folders && meta && fs.existsSync(resolveFolderPath(folder)) &&
+        getFolderIndexMtimeMs(resolveFolderPath(folder)) <= (meta.indexMtimeMs || 0)) continue;
+    progress({ text: `Indexing folders (${i + 1}/${allFolders.length})…`, count });
+    try {
+      const plan = planFolderRefresh(folder, force);
+      if (!plan) { changed = true; continue; }
+      const h = getHarness(plan.harnessId);
+      if (!externalTitles.has(h.id)) externalTitles.set(h.id, h.readSessionTitles?.() || null);
+      let batch = [];
+      let bytes = 0;
+      let stable = true;
+      let batchStarted = Date.now();
+      const flush = async () => {
+        if (batch.length) {
+          applyFolderRefresh(plan, batch, false);
+          count += batch.length;
+          changed = true;
+          batch = [];
+          bytes = 0;
+        }
+        // Rest for at least a quarter of the preceding work time as well as
+        // yielding between small batches. Very large single files still stay
+        // off the UI thread, and do not cause more workers to be spawned.
+        await new Promise(resolve => setTimeout(resolve, Math.max(pauseMs, (Date.now() - batchStarted) / 3)));
+        batchStarted = Date.now();
+      };
+      for (const { filePath, sessionId } of plan.toRead) {
+        const s = h.readSessionFile(filePath, folder, plan.folderProject, getCachedSession(sessionId));
+        if (!s) continue;
+        // Include external titles in the first FTS insert, rather than
+        // rewriting every Codex search document again after the initial scan.
+        const titles = externalTitles.get(h.id);
+        if (titles instanceof Map) s.aiTitle = titles.get(s.sessionId) || null;
+        // A growing transcript must remain eligible for the next pass.
+        try {
+          if (fs.statSync(filePath).mtime.toISOString() !== s.fileMtime) stable = false;
+        } catch { stable = false; }
+        batch.push(s);
+        bytes += Buffer.byteLength(s.textContent || '', 'utf8');
+        if (batch.length >= 8 || bytes >= 512 * 1024) await flush();
+      }
+      await flush();
+      // Preserve the old folder watermark when a file changed during its read.
+      // Its cached parser state still makes the next read incremental.
+      if (!stable) plan.indexMtimeMs = meta?.indexMtimeMs || 0;
+      applyFolderRefresh(plan, []);
+      if (plan.removedIds.length) changed = true;
+    } catch (err) {
+      log.error('Error indexing folder', folder, err);
+      throw err;
+    }
+  }
+  for (const h of availableHarnesses()) {
+    if (!disabledHarnessIds().has(h.id) && refreshHarnessTitles(h)) changed = true;
+  }
+  return { count, changed };
+}
+
 module.exports = {
+  indexFoldersInWorker,
   init,
   refreshFolder,
   reconcileCacheFromFilesystem,

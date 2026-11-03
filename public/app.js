@@ -1444,7 +1444,9 @@ initGridObservers();
       toggleGridView();
       return;
     }
-    // Session navigation: prev/next + arrows (see keybindings.js)
+    // Session navigation: prev/next + arrows (see keybindings.js). Arrows typed
+    // into a text field or editor move its cursor instead.
+    if (isTextEditingTarget(e.target) && isSessionNavKey(e) && !e.shiftKey) return;
     handleSessionNavKey(e);
   });
 }
