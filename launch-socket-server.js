@@ -21,6 +21,10 @@ const crypto = require('crypto');
 
 const SOCKET_FILE = 'launch.sock';
 const TOKEN_FILE = 'launch-token';
+// Holds the absolute path of the launch-session.js this running build ships, so
+// a caller finds the client of the very instance it talks to wherever the app
+// is installed or checked out, instead of guessing from a list of paths.
+const LAUNCH_CLIENT_FILE = 'launch-client';
 
 // A request bigger than this is junk or an attack, not a prompt.
 const MAX_REQUEST_BYTES = 64 * 1024;
@@ -35,7 +39,40 @@ const SESSION_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 // one. Both sides derive the path the same way, so neither hard-codes it.
 function defaultLaunchPaths(homeDir = os.homedir(), dataDir = process.env.SWITCHBOARD_DATA_DIR) {
   const dir = dataDir ? path.resolve(dataDir) : path.join(homeDir, '.switchboard');
-  return { dir, socketPath: path.join(dir, SOCKET_FILE), tokenPath: path.join(dir, TOKEN_FILE) };
+  return {
+    dir,
+    socketPath: path.join(dir, SOCKET_FILE),
+    tokenPath: path.join(dir, TOKEN_FILE),
+    launchClientPointerPath: path.join(dir, LAUNCH_CLIENT_FILE),
+  };
+}
+
+// Where this build's launch-session.js sits on disk. A packaged app runs from
+// app.asar, which plain `node` cannot read: the client and the module it
+// requires are unpacked next to it (package.json asarUnpack).
+function bundledLaunchClientPath({ appRoot, isPackaged = false, resourcesPath = null }) {
+  if (isPackaged) return path.join(resourcesPath, 'app.asar.unpacked', 'scripts', 'launch-session.js');
+  return path.join(appRoot, 'scripts', 'launch-session.js');
+}
+
+// Written through a temporary file and a rename, so a caller reading it while
+// the app starts never sees half a path.
+function writeLaunchClientPointer(pointerPath, clientPath) {
+  const tmp = `${pointerPath}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, `${clientPath}\n`, { mode: 0o600 });
+  fs.renameSync(tmp, pointerPath);
+}
+
+// Removes the pointer only while it still names this instance's client: an
+// instance that took the data dir over after this one wrote its own.
+function removeLaunchClientPointer(pointerPath, clientPath) {
+  try {
+    if (fs.readFileSync(pointerPath, 'utf8').trim() !== clientPath) return false;
+    fs.unlinkSync(pointerPath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 // Creates the token on first use and keeps it 0600 afterwards — a token file
@@ -161,7 +198,10 @@ const LAUNCH_FEATURES = ['options', 'manual-mode', 'project-ops'];
 // onSessionStates() -> { ok: true, sessions } answers a 'session-states' request.
 // onProjectOp(op, args) -> { ok: true, ... } | { ok: false, error } answers a
 // 'project-op' request, may be async.
-async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, onProjectOp = null, logger = null }) {
+// launchClient: { pointerPath, clientPath } publishes the client's path once
+// the socket listens, and withdraws it on close. A server that failed to listen
+// (another live instance holds the socket) publishes nothing.
+async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionStates = null, onProjectOp = null, launchClient = null, logger = null }) {
   await clearStaleSocket(socketPath);
 
   const server = net.createServer(socket => {
@@ -227,10 +267,20 @@ async function startLaunchSocketServer({ socketPath, token, onLaunch, onSessionS
   // The socket path itself is the outer gate; the token is the inner one.
   try { fs.chmodSync(socketPath, 0o600); } catch { /* not fatal, the token still guards */ }
   logger?.info?.(`[launch-socket] listening on ${socketPath}`);
+  if (launchClient) {
+    try {
+      writeLaunchClientPointer(launchClient.pointerPath, launchClient.clientPath);
+      logger?.info?.(`[launch-socket] launch client ${launchClient.clientPath}`);
+    } catch (err) {
+      // Callers fall back to their own path list; the socket still works.
+      logger?.warn?.(`[launch-socket] could not write ${launchClient.pointerPath}: ${err?.message || String(err)}`);
+    }
+  }
 
   return {
     server,
     close: () => new Promise(resolve => {
+      if (launchClient) removeLaunchClientPointer(launchClient.pointerPath, launchClient.clientPath);
       server.close(() => {
         try { fs.unlinkSync(socketPath); } catch { /* already gone */ }
         resolve();
@@ -244,6 +294,9 @@ module.exports = {
   LAUNCH_FEATURES,
   PROJECT_OPS,
   defaultLaunchPaths,
+  bundledLaunchClientPath,
+  writeLaunchClientPointer,
+  removeLaunchClientPointer,
   ensureLaunchToken,
   tokensMatch,
   parseLaunchRequest,
