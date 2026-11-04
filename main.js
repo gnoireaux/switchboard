@@ -47,6 +47,7 @@ const { buildPtyEnv } = require('./pty-env');
 const cleanPtyEnv = buildPtyEnv(process.env);
 const { shouldStartFresh, shouldBlockArchivedSession } = require('./session-launch');
 const { createTerminalActivity } = require('./terminal-activity');
+const { createQuitHoldGuard } = require('./quit-hold-guard');
 
 // Shell profiles → shell-profiles.js
 const { discoverShellProfiles, getShellProfiles, resolveShell, isWindows, isWslShell, windowsToWslPath, shellArgs, quoteArgvForShell, binaryBypassingShellAliases } = require('./shell-profiles');
@@ -324,29 +325,17 @@ function createWindow() {
   });
   mainWindow.on('focus', () => installedBuildWatcher?.check());
 
-  // Cmd+Q hold-to-quit guard. The menu's Quit item has no accelerator, so Cmd+Q
-  // arrives here instead of triggering an immediate quit. With running sessions,
-  // the user must HOLD Cmd+Q for QUIT_HOLD_MS.
-  //
-  // macOS does NOT deliver keyUp for a key released while Cmd is still held, so we
-  // can't detect release from keyUp. Instead we rely on auto-repeat: while held,
-  // the OS streams repeat keyDown events; each one re-arms a watchdog. When the key
-  // is released the repeats stop, the watchdog fires and cancels. Quitting requires
-  // a repeat keyDown to arrive after the full hold has elapsed, so a single tap (no
-  // repeats) can never reach the threshold — fail-safe against accidental Cmd+Q.
-  let quitHoldTimer = null;   // watchdog: fires when auto-repeat stops (= released)
-  let quitHoldActive = false;
-  let quitHoldStart = 0;
-  const cancelQuitHold = () => {
-    if (quitHoldTimer) { clearTimeout(quitHoldTimer); quitHoldTimer = null; }
-    if (quitHoldActive) {
-      quitHoldActive = false;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('quit-hold', { phase: 'cancel' });
-      }
-    }
-  };
-  mainWindow.on('blur', cancelQuitHold);
+  // Cmd+Q hold-to-quit guard: see quit-hold-guard.js.
+  const quitHold = createQuitHoldGuard({
+    holdMs: QUIT_HOLD_MS,
+    repeatGapMs: QUIT_HOLD_REPEAT_GAP_MS,
+    hasRunningSessions,
+    quit: quitApp,
+    showOverlay: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('quit-hold', state);
+    },
+  });
+  mainWindow.on('blur', quitHold.cancel);
 
   // Prevent Cmd+R / Ctrl+Shift+R from reloading the page (Chromium built-in).
   // Ctrl+R alone on macOS is NOT a reload shortcut and must pass through to xterm
@@ -357,28 +346,12 @@ function createWindow() {
     // Cmd+Q: handle on both keyDown and keyUp, so return before the keyDown-only guard below.
     if (input.meta && key === 'q' && !input.control && !input.alt) {
       event.preventDefault();
-      if (input.type === 'keyDown') {
-        if (!hasRunningSessions()) { quitApp(); return; }
-        if (!quitHoldActive) {
-          quitHoldActive = true;
-          quitHoldStart = Date.now();
-          mainWindow.webContents.send('quit-hold', { phase: 'start', duration: QUIT_HOLD_MS });
-        } else if (Date.now() - quitHoldStart >= QUIT_HOLD_MS) {
-          // Auto-repeat has continued for the full hold duration -> quit for real.
-          if (quitHoldTimer) { clearTimeout(quitHoldTimer); quitHoldTimer = null; }
-          quitHoldActive = false;
-          quitApp();
-          return;
-        }
-        // Re-arm the release watchdog on every (repeat) keyDown.
-        if (quitHoldTimer) clearTimeout(quitHoldTimer);
-        quitHoldTimer = setTimeout(cancelQuitHold, QUIT_HOLD_REPEAT_GAP_MS);
-      }
+      if (input.type === 'keyDown') quitHold.keyDown();
       return;
     }
     // Releasing Cmd or Q during a hold cancels it.
     if (input.type === 'keyUp' && (key === 'q' || key === 'meta')) {
-      cancelQuitHold();
+      quitHold.cancel();
       return;
     }
 
