@@ -54,6 +54,7 @@ const { scanSchedules } = require('./schedule-runner');
 const { encodeProjectPath } = require('./encode-project-path');
 const { resolveEffectiveSettings } = require('./resolve-effective-settings');
 const sessionConfig = require('./public/session-config');
+const sessionsToResume = require('./public/sessions-to-resume');
 const { listProjectDirectory, readProjectFile, readPreviewFile, openFileExternally } = require('./project-files');
 const { manageProjectEntry } = require('./file-management');
 const { resolveTerminalFiles } = require('./terminal-file-links');
@@ -1143,6 +1144,14 @@ ipcMain.handle('search', (_event, type, query, titleOnly) => {
 // --- IPC: settings ---
 ipcMain.handle('get-setting', (_event, key) => {
   return getSetting(key);
+});
+
+// The sessions recorded at the last quit, handed out once: a renderer reload
+// must not resume them a second time, nor a later launch after a crash.
+ipcMain.handle('take-sessions-to-resume', () => {
+  const stored = getSetting(sessionsToResume.SETTING_KEY);
+  if (stored) deleteSetting(sessionsToResume.SETTING_KEY);
+  return stored;
 });
 
 ipcMain.handle('set-setting', (_event, key, value) => {
@@ -2778,6 +2787,17 @@ app.on('before-quit', () => {
   if (projectsWatcher) {
     projectsWatcher.close();
     projectsWatcher = null;
+  }
+
+  // Remember the CLI sessions still running, so the next launch resumes them.
+  // Before the kills below: they mark every session exited.
+  try {
+    const record = sessionsToResume.recordAtQuit({ globalSettings: getSetting('global'), activeSessions });
+    if (record) setSetting(sessionsToResume.SETTING_KEY, record);
+    else deleteSetting(sessionsToResume.SETTING_KEY);
+    if (record) log.info(`[resume] recorded ${record.sessions.length} session(s) to resume at next launch`);
+  } catch (err) {
+    log.error('[resume] could not record running sessions', err);
   }
 
   // Kill all PTY processes on quit

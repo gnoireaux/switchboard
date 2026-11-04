@@ -105,6 +105,8 @@
     // Global-only: where new projects get their folder (projects.js). Empty
     // means the default, ~/Switchboard.
     const projectsRootValue = (!isProject && typeof current.projectsRoot === 'string') ? current.projectsRoot : '';
+    // Global-only, on unless turned off (sessions-to-resume.js).
+    const resumeAfterRestartValue = current.resumeSessionsAfterRestart !== false;
     const shellProfileValue = fieldValue('shellProfile', 'auto');
 
     // Discover available shell profiles
@@ -346,6 +348,16 @@
             <label class="settings-toggle"><input type="checkbox" id="sv-mcp-emulation" ${mcpEmulationValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
           </div>
         </div>
+
+        <div class="settings-field">
+          <div class="settings-field-info">
+            <span class="settings-label">Resume Running Sessions After Restart</span>
+            <div class="settings-description">Quitting stops every session. When on, the Claude and Codex sessions still running at quit are resumed when Switchboard starts again. Close a session before quitting to leave it stopped.</div>
+          </div>
+          <div class="settings-field-control">
+            <label class="settings-toggle"><input type="checkbox" id="sv-resume-after-restart" ${resumeAfterRestartValue ? 'checked' : ''}><span class="settings-toggle-slider"></span></label>
+          </div>
+        </div>
       </div>` : ''}
 
       ${!isProject ? `<div class="settings-section">
@@ -528,6 +540,7 @@
         settings.sidebarZoom = parseFloat(settingsViewerBody.querySelector('#sv-sidebar-zoom').value) || 1;
         settings.keybindings = kbWorking;
         settings.mcpEmulation = settingsViewerBody.querySelector('#sv-mcp-emulation').checked;
+        settings.resumeSessionsAfterRestart = settingsViewerBody.querySelector('#sv-resume-after-restart').checked;
         settings.shellProfile = settingsViewerBody.querySelector('#sv-shell-profile').value || 'auto';
         settings.projectsRoot = settingsViewerBody.querySelector('#sv-projects-root').value.trim();
       }

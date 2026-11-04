@@ -1202,7 +1202,7 @@ async function unarchiveSessionBeforeOpen(session) {
   return true;
 }
 
-async function openSession(session, customOptions) {
+async function openSession(session, customOptions, { show = true } = {}) {
   if (!await unarchiveSessionBeforeOpen(session)) return;
 
   const { sessionId, projectPath } = session;
@@ -1244,7 +1244,7 @@ async function openSession(session, customOptions) {
   if (!result.ok) {
     entry.terminal.write(`\r\nError: ${result.error}\r\n`);
     entry.closed = true;
-    return;
+    return false;
   }
   if (typeof setSessionMcpActive === 'function') setSessionMcpActive(sessionId, !!result.mcpActive);
 
@@ -1252,8 +1252,68 @@ async function openSession(session, customOptions) {
   const pending = pendingSessions.get(sessionId);
   if (pending) pending.exited = false;
 
-  showSession(sessionId);
-  pollActiveSessions();
+  if (show) {
+    showSession(sessionId);
+    pollActiveSessions();
+  }
+  return true;
+}
+
+/**
+ * A row for a recorded session the lists do not show (it never wrote a
+ * transcript, or the index has not caught up), so the resumed terminal has a
+ * place in the sidebar. Same shape as a freshly launched session's.
+ */
+function injectResumedSessionRow(saved) {
+  const now = new Date().toISOString();
+  const session = {
+    sessionId: saved.sessionId, summary: 'Resumed session', firstPrompt: '',
+    projectPath: saved.projectPath, runtime: saved.runtime || 'claude',
+    name: null, starred: 0, archived: 0, messageCount: 0, modified: now, created: now,
+    projectId: saved.projectId || null, trackId: saved.trackId || null,
+  };
+  const folder = encodeProjectPath(saved.projectPath);
+  pendingSessions.set(session.sessionId, { session, projectPath: saved.projectPath, folder });
+  sessionMap.set(session.sessionId, session);
+  for (const projList of [cachedProjects, cachedAllProjects]) {
+    let proj = projList.find(p => p.projectPath === saved.projectPath);
+    if (!proj) {
+      proj = { folder, projectPath: saved.projectPath, sessions: [] };
+      projList.unshift(proj);
+    }
+    if (!proj.sessions.some(s => s.sessionId === session.sessionId)) proj.sessions.unshift(session);
+  }
+  injectPendingIntoTree(session);
+  return session;
+}
+
+/**
+ * Resume, hidden, the Claude/codex sessions that were running when the app
+ * last quit (main recorded them at quit). Off with the global setting
+ * "Resume running sessions after restart".
+ */
+async function resumeSessionsRunningAtQuit() {
+  let stored = null;
+  let globalSettings = null;
+  try {
+    [stored, globalSettings] = await Promise.all([window.api.takeSessionsToResume(), window.api.getSetting('global')]);
+  } catch { return; }
+  const toReopen = SessionsToResume.sessionsToReopen(stored, {
+    globalSettings,
+    isOpen: id => openSessions.has(id),
+    lookup: id => sessionMap.get(id),
+  });
+  if (!toReopen.length) return;
+  const jobs = toReopen.map(async ({ saved, row }) => {
+    const session = row || injectResumedSessionRow(saved);
+    const defaults = await resolveDefaultSessionOptions({ projectPath: saved.projectPath });
+    const options = SessionsToResume.resumeOptions(defaults, saved, row);
+    try { return await openSession(session, options, { show: false }); } catch { return false; }
+  });
+  const resumed = (await Promise.all(jobs)).filter(Boolean).length;
+  refreshSidebar();
+  await pollActiveSessions();
+  if (resumed) setUpdaterStatus(`Resumed ${resumed} session${resumed === 1 ? '' : 's'} from before the restart`, 10000);
 }
 
 // Handle window resize
@@ -1514,6 +1574,7 @@ loadProjects().then(async () => {
   if (lastTab !== activeTab) document.querySelector(`.sidebar-tab[data-tab="${lastTab}"]`)?.click();
   await restoreActiveTaskView();
   await restorePersistedTerminalProcesses();
+  await resumeSessionsRunningAtQuit();
   // Restore grid view preference before opening sessions so they enter grid mode
   if (!activeTaskView && localStorage.getItem('gridViewActive') === '1') {
     showGridView();

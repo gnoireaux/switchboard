@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
   getSetting: (key) => ipcRenderer.invoke('get-setting', key),
   setSetting: (key, value) => ipcRenderer.invoke('set-setting', key, value),
   deleteSetting: (key) => ipcRenderer.invoke('delete-setting', key),
+  takeSessionsToResume: () => ipcRenderer.invoke('take-sessions-to-resume'),
   getEffectiveSettings: (projectPath) => ipcRenderer.invoke('get-effective-settings', projectPath),
   getShellProfiles: () => ipcRenderer.invoke('get-shell-profiles'),
 
