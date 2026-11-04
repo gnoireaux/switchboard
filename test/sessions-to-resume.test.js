@@ -230,7 +230,7 @@ test('quitting asks first when a session is working or waiting, and only once', 
   assert.match(cancelled.dialogs[0].message, /^1 session is working or waiting on you$/);
   assert.match(cancelled.dialogs[0].detail, /resumed at the next launch, but idle/);
   assert.match(cancelled.dialogs[0].detail, /• Fix the parser — alpha \(working\)/);
-  assert.deepEqual([...cancelled.dialogs[0].buttons], ['Cancel', 'Quit Anyway']);
+  assert.deepEqual([...cancelled.dialogs[0].buttons], ['Keep Switchboard Open', 'Quit and Stop It']);
   assert.equal(cancelled.dialogs[0].cancelId, 0);
   assert.equal(cancelled.context.confirmQuitInterruptingSessions(), false, 'asked again after a Cancel');
   assert.equal(cancelled.dialogs.length, 2);
@@ -238,6 +238,7 @@ test('quitting asks first when a session is working or waiting, and only once', 
   const agreed = quitGuardHarness({ activeSessions, waiting: { s2: 'permission prompt' }, cached: { s2: { aiTitle: 'Deploy  the\nthing' } } });
   assert.equal(agreed.context.confirmQuitInterruptingSessions(), true);
   assert.match(agreed.dialogs[0].message, /^2 sessions/);
+  assert.equal(agreed.dialogs[0].buttons[1], 'Quit and Stop 2 Sessions');
   assert.match(agreed.dialogs[0].detail, /• Deploy the thing — repo \(waiting: permission prompt\)/);
   assert.equal(agreed.context.confirmQuitInterruptingSessions(), true);
   assert.equal(agreed.dialogs.length, 1, 'the quit that follows Quit Anyway does not ask again');

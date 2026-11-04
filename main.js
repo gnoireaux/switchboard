@@ -212,7 +212,9 @@ function confirmQuitInterruptingSessions() {
       ? 'Quitting stops them. They are resumed at the next launch, but idle: a stopped turn does not continue and a pending question is not asked again.'
       : 'Quitting stops them mid-way.')
       + '\n\n' + sessionsToResume.quitWarningLines(interrupted, sessionTitleForQuitDialog).join('\n'),
-    buttons: ['Cancel', 'Quit Anyway'], defaultId: 0, cancelId: 0, noLink: true,
+    // Buttons name what they do: a generic "Cancel" leaves the reader to work out what is cancelled.
+    buttons: ['Keep Switchboard Open', count === 1 ? 'Quit and Stop It' : `Quit and Stop ${count} Sessions`],
+    defaultId: 0, cancelId: 0, noLink: true,
   };
   const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
   const response = parent ? dialog.showMessageBoxSync(parent, options) : dialog.showMessageBoxSync(options);
