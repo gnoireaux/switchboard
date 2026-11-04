@@ -7323,5 +7323,7 @@ textarea.settings-input {
 }
 .session-waiting-chip { color: #f0a050; background: rgba(240, 160, 80, 0.16); }
 .session-scrolled-chip { color: #8fb4d9; background: rgba(143, 180, 217, 0.16); }
+.session-interrupted-chip { color: #e07a7a; background: rgba(224, 122, 122, 0.16); }
 .waiting-on-user .session-waiting-chip,
-.terminal-scrolled-up .session-scrolled-chip { display: inline-flex; }
+.terminal-scrolled-up .session-scrolled-chip,
+.interrupted-by-restart .session-interrupted-chip { display: inline-flex; }

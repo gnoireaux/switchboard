@@ -270,6 +270,10 @@ function forEachSessionItem(sessionId, fn) {
 // `claude agents` for every session, hosted ones included.
 let waitingSessions = new Map(); // sessionId → what the agent waits for
 const scrolledUpSessions = new Set(); // open terminals not showing their last line
+// Resumed after a restart that cut their turn or pending question short
+// (sessions-to-resume.js interruptionOf). Kept until someone types into it
+// (terminal-manager.js onData): a resumed CLI may report busy while it starts.
+const interruptedByRestartSessions = new Map(); // sessionId → { kind, reason? }
 
 function applySessionStateClasses(item, sessionId) {
   const reason = waitingSessions.get(sessionId);
@@ -277,6 +281,18 @@ function applySessionStateClasses(item, sessionId) {
   item.classList.toggle('terminal-scrolled-up', scrolledUpSessions.has(sessionId));
   const chip = item.querySelector('.session-waiting-chip');
   if (chip) chip.title = reason ? `Waiting on you: ${reason}` : '';
+  const interruptedBy = interruptedByRestartSessions.get(sessionId);
+  item.classList.toggle('interrupted-by-restart', !!interruptedBy);
+  const interruptedChip = item.querySelector('.session-interrupted-chip');
+  if (interruptedChip) interruptedChip.title = interruptedBy ? SessionsToResume.interruptedTooltip(interruptedBy) : '';
+}
+
+function setInterruptedByRestart(sessionId, interruptedBy) {
+  if (!sessionId) return;
+  if (!interruptedBy && !interruptedByRestartSessions.has(sessionId)) return;
+  if (interruptedBy) interruptedByRestartSessions.set(sessionId, interruptedBy);
+  else interruptedByRestartSessions.delete(sessionId);
+  forEachSessionItem(sessionId, item => applySessionStateClasses(item, sessionId));
 }
 
 window.api.onSessionStates(sessions => {
@@ -1308,12 +1324,19 @@ async function resumeSessionsRunningAtQuit() {
     const session = row || injectResumedSessionRow(saved);
     const defaults = await resolveDefaultSessionOptions({ projectPath: saved.projectPath });
     const options = SessionsToResume.resumeOptions(defaults, saved, row);
-    try { return await openSession(session, options, { show: false }); } catch { return false; }
+    let opened = false;
+    try { opened = await openSession(session, options, { show: false }); } catch {}
+    if (opened && saved.interruptedBy) setInterruptedByRestart(session.sessionId, saved.interruptedBy);
+    return opened;
   });
   const resumed = (await Promise.all(jobs)).filter(Boolean).length;
   refreshSidebar();
   await pollActiveSessions();
-  if (resumed) setUpdaterStatus(`Resumed ${resumed} session${resumed === 1 ? '' : 's'} from before the restart`, 10000);
+  const interrupted = toReopen.filter(({ saved }) => interruptedByRestartSessions.has(saved.sessionId)).length;
+  if (resumed) {
+    setUpdaterStatus(`Resumed ${resumed} session${resumed === 1 ? '' : 's'} from before the restart`
+      + (interrupted ? ` (${interrupted} interrupted: see the \u21bb rows)` : ''), 10000);
+  }
 }
 
 // Handle window resize

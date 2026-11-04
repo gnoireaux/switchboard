@@ -632,6 +632,7 @@ function createTerminalEntry(session) {
     // sequences are skipped: xterm answers the CLI's terminal queries through
     // this same callback, and those are not the user.
     if (data[0] !== '\x1b' && typeof clearSessionHandoff === 'function') clearSessionHandoff(entry.session.sessionId);
+    if (data[0] !== '\x1b' && typeof setInterruptedByRestart === 'function') setInterruptedByRestart(entry.session.sessionId, null);
     window.api.sendInput(entry.session.sessionId, data);
   });
   setupTerminalKeyBindings(terminal, container, () => entry.session.sessionId, { onFind: openSearchBar });

@@ -176,6 +176,53 @@ const QUIT_HOLD_REPEAT_GAP_MS = 1200;
 function quitApp() {
   app.quit();
 }
+// Quitting kills every PTY: a session mid-turn loses the turn, and one parked
+// on a question or permission prompt comes back (resumed) without it. Every
+// quit path asks first when that would happen: Cmd+Q, the menu, the Dock, the
+// new-build restart. Set once the user agreed (or nothing needed asking), so
+// the quit that follows does not ask again.
+let quitConfirmed = false;
+function waitingReasonsNow() {
+  const reasons = new Map();
+  for (const [id, state] of Object.entries(sessionStates.snapshot())) {
+    if (state.waitingFor) reasons.set(id, state.waitingFor);
+  }
+  return reasons;
+}
+function sessionTitleForQuitDialog({ sessionId, projectPath }) {
+  let title = null;
+  try {
+    const cached = getCachedSession(sessionId);
+    title = getMeta(sessionId)?.name || cached?.aiTitle || cached?.summary || cached?.firstPrompt || null;
+  } catch {}
+  title = (title || sessionId.slice(0, 8)).replace(/\s+/g, ' ').trim();
+  if (title.length > 60) title = title.slice(0, 59) + '…';
+  return projectPath ? `${title} — ${path.basename(projectPath)}` : title;
+}
+function confirmQuitInterruptingSessions() {
+  if (quitConfirmed) return true;
+  const interrupted = sessionsToResume.sessionsInterruptedByQuit(activeSessions, waitingReasonsNow());
+  if (!interrupted.length) return true;
+  const count = interrupted.length;
+  const resumeOn = sessionsToResume.resumeEnabled(getSetting('global'));
+  const options = {
+    type: 'warning',
+    message: count === 1 ? '1 session is working or waiting on you' : `${count} sessions are working or waiting on you`,
+    detail: (resumeOn
+      ? 'Quitting stops them. They are resumed at the next launch, but idle: a stopped turn does not continue and a pending question is not asked again.'
+      : 'Quitting stops them mid-way.')
+      + '\n\n' + sessionsToResume.quitWarningLines(interrupted, sessionTitleForQuitDialog).join('\n'),
+    buttons: ['Cancel', 'Quit Anyway'], defaultId: 0, cancelId: 0, noLink: true,
+  };
+  const parent = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null;
+  const response = parent ? dialog.showMessageBoxSync(parent, options) : dialog.showMessageBoxSync(options);
+  if (response !== 1) {
+    log.info(`[quit] cancelled: ${count} session(s) working or waiting`);
+    return false;
+  }
+  quitConfirmed = true;
+  return true;
+}
 function hasRunningSessions() {
   for (const [, session] of activeSessions) {
     if (!session.exited) return true;
@@ -2655,6 +2702,9 @@ ipcMain.handle('updater-install', () => {
   autoUpdater.quitAndInstall();
 });
 ipcMain.handle('relaunch-for-installed-build', () => {
+  // Asked before app.relaunch(): a cancelled quit must not leave a relaunch
+  // armed for the next one.
+  if (!confirmQuitInterruptingSessions()) return { ok: false, cancelled: true };
   app.relaunch();
   app.quit();
 });
@@ -2763,7 +2813,11 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  if (!confirmQuitInterruptingSessions()) {
+    event.preventDefault();
+    return;
+  }
   // The renderer persists raw-terminal descriptors and scrollback during its
   // unload. Do not report the shutdown kills as user-initiated terminal exits,
   // or that renderer cleanup would delete the descriptors before restart.
@@ -2792,7 +2846,9 @@ app.on('before-quit', () => {
   // Remember the CLI sessions still running, so the next launch resumes them.
   // Before the kills below: they mark every session exited.
   try {
-    const record = sessionsToResume.recordAtQuit({ globalSettings: getSetting('global'), activeSessions });
+    const record = sessionsToResume.recordAtQuit({
+      globalSettings: getSetting('global'), activeSessions, waitingReasons: waitingReasonsNow(),
+    });
     if (record) setSetting(sessionsToResume.SETTING_KEY, record);
     else deleteSetting(sessionsToResume.SETTING_KEY);
     if (record) log.info(`[resume] recorded ${record.sessions.length} session(s) to resume at next launch`);

@@ -848,7 +848,10 @@ function buildSessionItem(session) {
   scrolledChip.className = 'session-state-chip session-scrolled-chip';
   scrolledChip.textContent = '\u2191 scrolled';
   scrolledChip.title = 'Terminal scrolled up: not showing its last line';
-  metaEl.append(mark, timeEl, waitingChip, scrolledChip);
+  const interruptedChip = document.createElement('span');
+  interruptedChip.className = 'session-state-chip session-interrupted-chip';
+  interruptedChip.textContent = '\u21bb interrupted';
+  metaEl.append(mark, timeEl, waitingChip, scrolledChip, interruptedChip);
   // Started by a scheduled task: a clock, with which one and when in its tooltip.
   if (session.scheduleId && typeof scheduleChipHtml === 'function') {
     const chip = document.createElement('span');
